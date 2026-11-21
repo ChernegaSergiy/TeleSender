@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 420px; margin: 80px auto; padding: 0 20px;">
+    <div style="background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-brutal); padding: 32px;">
+        <h1 id="login-title" style="{% if require_2fa %}display: none;{% endif %} font-family: var(--font-head); font-size: 28px; margin: 0 0 24px 0; text-transform: uppercase;">{{ t('web.login.title') }}</h1>
+        
+        <div id="login-error" style="{% if not error and not request.query.get('error') %}display: none;{% endif %} background: #fee; border: 2px solid #f00; padding: 12px 16px; margin-bottom: 20px; color: #900; font-weight: 600;">
+            {% if request.query.get('error') == '1' %}
+            {{ t('web.login.error') }}
+            {% elif error %}
+            {{ error }}
+            {% endif %}
+        </div>
+        
+        <!-- Telegram Login Widget -->
+        <div id="telegram-login-container" style="{% if require_2fa %}display: none;{% endif %} margin-bottom: 20px;">
+            {% if config.bot_username %}
+            <div class="telegram-widget-wrap" style="display: flex; justify-content: center; width: 100%; line-height: 0;">
+                <div style="border-radius: 10px; overflow: hidden; line-height: 0;">
+                    <script async src="https://telegram.org/js/telegram-widget.js?22"
+                            data-telegram-login="{{ config.bot_username }}"
+                            data-size="large"
+                            data-radius="10"
+                            data-userpic="false"
+                            data-onauth="telegramLoginCallback(user)"
+                            data-request-access="write"></script>
+                </div>
+            </div>
+            {% else %}
+            <div style="font-size: 13px; color: var(--muted); margin-top: 8px;">{{ t('web.login.telegram_unavailable') }}</div>
+            {% endif %}
+        </div>
+
+<!-- Standard Login Form -->
+        <div id="login-form-container" style="{% if require_2fa %}display: none;{% endif %}">
+            <div style="text-align: center; margin-bottom: 20px; color: var(--muted); font-size: 14px;">{{ t('web.login.or_password') }}</div>
+            <form id="login-form" method="post" action="/auth/login">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; font-family: var(--font-head); font-weight: 700; margin-bottom: 8px; text-transform: uppercase; font-size: 12px;">{{ t('web.login.password') }}</label>
+                    <input type="password" id="login-password" name="password" class="input" style="width: 100%; box-sizing: border-box;" required autofocus>
+                </div>
+                <button type="submit" id="login-submit-btn" class="btn btn-primary" style="width: 100%;">{{ t('web.login.submit') }}</button>
+            </form>
+        </div>
+
+        <!-- 2FA Waiting Screen -->
+        <div id="two-factor-container" style="{% if not require_2fa %}display: none;{% endif %}">
+            <h2 id="two-factor-heading" style="font-family: var(--font-head); font-size: 20px; margin: 0 0 16px 0; text-transform: uppercase;">{{ t('web.login.two_factor_title') }}</h2>
+            <div style="font-size: 14px; color: var(--muted); margin-bottom: 20px; line-height: 1.6;">
+                {{ t('web.login.two_factor_hint') }}
+            </div>
+            
+            <div id="two-factor-status" style="background: var(--bg); border: 2px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 20px; font-weight: 600; font-size: 14px; text-align: center;">
+                {{ t('web.login.two_factor_waiting') }}
+            </div>
+            
+            <button type="button" id="two-factor-cancel-btn" class="btn" style="width: 100%; box-sizing: border-box;">{{ t('web.login.two_factor_cancel') }}</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+(function() {
+    var form = document.getElementById('login-form');
+    var passwordInput = document.getElementById('login-password');
+    var submitBtn = document.getElementById('login-submit-btn');
+    var formContainer = document.getElementById('login-form-container');
+    var twoFactorContainer = document.getElementById('two-factor-container');
+    var loginTitle = document.getElementById('login-title');
+    var statusBox = document.getElementById('two-factor-status');
+    var errorBox = document.getElementById('login-error');
+    var cancelBtn = document.getElementById('two-factor-cancel-btn');
+    var pollTimer = null;
+    var activeReqId = "{{ req_id }}";
+
+    function showError(msg) {
+        if (!errorBox) return;
+        errorBox.textContent = msg;
+        errorBox.style.display = 'block';
+    }
+
+    function hideError() {
+        if (!errorBox) return;
+        errorBox.style.display = 'none';
+    }
+
+    // Expose for Telegram Login Widget callback (defined outside this scope).
+    window.__showLoginError = showError;
+
+    function resetToLoginForm() {
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+        activeReqId = "";
+        if (twoFactorContainer) twoFactorContainer.style.display = 'none';
+        if (loginTitle) loginTitle.style.display = 'block';
+        if (formContainer) formContainer.style.display = 'block';
+        if (passwordInput) {
+            passwordInput.value = '';
+            passwordInput.focus();
+        }
+        if (statusBox) {
+            statusBox.style.borderColor = 'var(--border)';
+            statusBox.style.background = 'var(--bg)';
+            statusBox.style.color = 'inherit';
+            statusBox.textContent = "{{ t('web.login.two_factor_waiting') }}";
+        }
+    }
+
+    function showTwoFactor(reqId) {
+        activeReqId = reqId;
+        hideError();
+        if (formContainer) formContainer.style.display = 'none';
+        if (loginTitle) loginTitle.style.display = 'none';
+        if (twoFactorContainer) twoFactorContainer.style.display = 'block';
+        startPolling(reqId);
+    }
+
+    function startPolling(reqId) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(function() {
+            fetch('/auth/2fa/status?req_id=' + encodeURIComponent(reqId))
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.status === 'approved') {
+                        clearInterval(pollTimer);
+                        statusBox.style.borderColor = '#16a34a';
+                        statusBox.style.background = '#dcfce7';
+                        statusBox.style.color = '#15803d';
+                        statusBox.textContent = "{{ t('web.login.two_factor_approved') }}";
+                        setTimeout(function() {
+                            window.location.href = '/';
+                        }, 600);
+                    } else if (data.status === 'rejected') {
+                        clearInterval(pollTimer);
+                        statusBox.style.borderColor = '#dc2626';
+                        statusBox.style.background = '#fee2e2';
+                        statusBox.style.color = '#991b1b';
+                        statusBox.textContent = "{{ t('web.login.two_factor_rejected') }}";
+                    } else if (data.status === 'expired') {
+                        clearInterval(pollTimer);
+                        statusBox.style.borderColor = '#eab308';
+                        statusBox.style.background = '#fef9c3';
+                        statusBox.style.color = '#854d0e';
+                        statusBox.textContent = "{{ t('web.login.two_factor_expired') }}";
+                    } else if (data.status === 'cancelled') {
+                        clearInterval(pollTimer);
+                        resetToLoginForm();
+                    }
+                })
+                .catch(function(err) {
+                    console.error('2FA status check error:', err);
+                });
+        }, 1500);
+    }
+
+    if (activeReqId) {
+        if (loginTitle) loginTitle.style.display = 'none';
+        startPolling(activeReqId);
+    }
+
+    // Auto-login when opened from Telegram Mini App ("Open web interface" button).
+    // Backend verifies signed initData and checks Telegram ID against allowed users.
+    try {
+        var tg = window.Telegram && window.Telegram.WebApp;
+        if (tg && tg.initData && !activeReqId) {
+            try { tg.ready(); tg.expand(); } catch (e) {}
+            fetch('/auth/telegram-webapp', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({ initData: tg.initData })
+            })
+            .then(function(res) { return res.json().then(function(d){ return {ok: res.ok, data: d}; }); })
+            .then(function(result) {
+                if (result.ok && result.data && result.data.redirect) {
+                    window.location.href = result.data.redirect;
+                } else if (result.data && result.data.error) {
+                    // Not allowed or invalid: keep normal login page (password available).
+                    if (typeof showError === 'function') showError(result.data.error);
+                }
+            })
+            .catch(function(){});
+        }
+    } catch (e) {}
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            cancelBtn.disabled = true;
+            fetch('/auth/2fa/cancel', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({ req_id: activeReqId })
+            }).finally(function() {
+                cancelBtn.disabled = false;
+                resetToLoginForm();
+            });
+        });
+    }
+
+    if (form) {
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            hideError();
+            var password = passwordInput.value;
+            if (!password) return;
+
+            submitBtn.disabled = true;
+            fetch('/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({ password: password })
+            })
+            .then(function(res) {
+                return res.json().then(function(data) {
+                    return { ok: res.ok, status: res.status, data: data };
+                });
+            })
+            .then(function(result) {
+                submitBtn.disabled = false;
+                if (!result.ok) {
+                    showError(result.data.error || "{{ t('web.login.error') }}");
+                    return;
+                }
+                if (result.data.require_2fa) {
+                    showTwoFactor(result.data.request_id);
+                } else if (result.data.redirect) {
+                    window.location.href = result.data.redirect;
+                } else {
+                    window.location.href = '/';
+                }
+            })
+            .catch(function(err) {
+                submitBtn.disabled = false;
+                form.submit();
+            });
+        });
+    }
+})();
+
+// Telegram Login Widget callback
+function telegramLoginCallback(user) {
+    var showErr = window.__showLoginError || function(msg){
+        var box = document.getElementById('login-error');
+        if (box) { box.textContent = msg; box.style.display = 'block'; }
+    };
+    fetch('/auth/telegram-login', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({ user: user })
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+        if (data.redirect) {
+            window.location.href = data.redirect;
+        } else if (data.error) {
+            showErr(data.error);
+        }
+    })
+    .catch(function(err) {
+        console.error('Telegram login error:', err);
+        showErr("{{ t('web.login.telegram_error') }}");
+    });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "icons.html" import icon_close, icon_plus, icon_upload %}
+{% from "cards.html" import task_card %}
+{% set initial_tasks = initial_data.tasks if initial_data is defined and initial_data.tasks is defined else none %}
+{% set tasks_all = initial_tasks or [] %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">{{ t('web.tasks.title') }}</h1>
+    <div class="page-header-actions">
+        <button class="btn btn-sm" onclick="stopAllTasks()">{{ t('web.tasks.stop_all') }}</button>
+        <button class="btn btn-sm btn-danger" onclick="deactivateAllTasks()">{{ t('web.tasks.deactivate_all') }}</button>
+        <button class="btn btn-primary" onclick="openCreateTaskModal()">{{ icon_plus() }} {{ t('web.tasks.new') }}</button>
+    </div>
+</div>
+
+<div class="filters" id="filters">
+    <button class="filter-chip active" data-filter="all">{{ t('web.tasks.filter_all') }} <span class="count" id="count-all">{{ tasks_all|length }}</span></button>
+    <button class="filter-chip" data-filter="active">{{ t('web.tasks.filter_active') }} <span class="count" id="count-active">{{ tasks_all|selectattr('active')|list|length }}</span></button>
+    <button class="filter-chip" data-filter="running">{{ t('web.tasks.filter_running') }} <span class="count" id="count-running">{{ tasks_all|selectattr('running')|list|length }}</span></button>
+    <button class="filter-chip" data-filter="stopped">{{ t('web.tasks.filter_stopped') }} <span class="count" id="count-stopped">{{ tasks_all|rejectattr('active')|list|length }}</span></button>
+</div>
+
+<div class="list" id="tasks-list" aria-busy="{{ 'false' if initial_tasks is not none else 'true' }}">{% if initial_tasks is not none %}{% if tasks_all %}{% for task in tasks_all %}{{ task_card(task) }}{% endfor %}{% else %}<div class="empty"><div class="empty-text">{{ t('web.tasks.empty') }}</div></div>{% endif %}{% endif %}</div>
+
+<!-- Modal window -->
+<div class="modal" id="task-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title" id="modal-title">{{ t('web.tasks.new_task') }}</h2>
+            <button class="modal-close" onclick="closeTaskModal()" type="button" aria-label="{{ t('web.common.close') }}">{{ icon_close() }}</button>
+        </div>
+        <form id="task-form" onsubmit="saveTask(event)">
+            <input type="hidden" id="task-id">
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.tasks.chats') }}</label>
+                <input type="text" class="input" id="task-chat" placeholder="{{ t('web.tasks.chats_placeholder') }}" required>
+                <span class="field-hint">{{ t('web.tasks.chats_hint') }}</span>
+            </div>
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.tasks.text') }}</label>
+                <textarea class="textarea" id="task-message" rows="4" placeholder="{{ t('web.tasks.text_placeholder') }}"></textarea>
+                <span class="field-hint" id="message-hint" style="display: none;">{{ t('web.tasks.rotation_ignores_text') }}</span>
+            </div>
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.tasks.media_type') }}</label>
+                <select class="select" id="task-media-type" onchange="toggleMediaPath()">
+                    <option value="">{{ t('web.tasks.media_none') }}</option>
+                    <option value="photo">{{ t('web.tasks.media_photo') }}</option>
+                    <option value="video">{{ t('web.tasks.media_video') }}</option>
+                    <option value="document">{{ t('web.tasks.media_document') }}</option>
+                    <option value="audio">{{ t('web.tasks.media_audio') }}</option>
+                    <option value="sticker">{{ t('web.tasks.media_sticker') }}</option>
+                    <option value="gif">{{ t('web.tasks.media_gif') }}</option>
+                    <option value="voice">{{ t('web.tasks.media_voice') }}</option>
+                    <option value="video_note">{{ t('web.tasks.media_video_note') }}</option>
+                </select>
+            </div>
+            
+            <div class="field" id="media-path-field" style="display: none;">
+                <label class="field-label">{{ t('web.tasks.media_path') }}</label>
+                <input type="text" class="input" id="task-media-path" placeholder="{{ t('web.tasks.media_path_placeholder') }}">
+                <div class="media-upload-row">
+                    <button type="button" class="btn btn-sm" id="task-media-upload-btn" onclick="document.getElementById('task-media-file').click()">
+                        {{ icon_upload() }} {{ t('web.tasks.media_upload') }}
+                    </button>
+                    <input type="file" id="task-media-file" style="display: none;" onchange="uploadTaskMedia(event)">
+                    <span class="field-hint" id="media-upload-status">{{ t('web.tasks.media_upload_hint') }}</span>
+                </div>
+            </div>
+            
+            <div class="field" id="rotation-container">
+                <label class="field-label">{{ t('web.tasks.rotation') }}</label>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="task-rotation" onchange="toggleRotation()">
+                    <label for="task-rotation">{{ t('web.tasks.rotation_enable') }}</label>
+                </div>
+                <div id="rotation-field" style="display: none;">
+                    <textarea class="textarea" id="task-rotation-messages" rows="6" placeholder="{{ t('web.tasks.rotation_placeholder')|safe }}"></textarea>
+                    <span class="field-hint">{{ t('web.tasks.rotation_hint') }}</span>
+                </div>
+            </div>
+            
+            <div class="field" id="once-container">
+                <label class="field-label">{{ t('web.tasks.once') }}</label>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="task-once" onchange="toggleOnce()">
+                    <label for="task-once">{{ t('web.tasks.once') }}</label>
+                </div>
+                <div id="once-field" style="display: none;">
+                    <input type="text" class="input" id="task-once-time" placeholder="{{ t('web.tasks.once_time_placeholder') }}">
+                    <span class="field-hint">{{ t('web.tasks.once_hint') }}</span>
+                </div>
+            </div>
+            
+            <div class="field" id="interval-field">
+                <label class="field-label">{{ t('web.tasks.interval') }}</label>
+                <input type="text" class="input" id="task-interval" placeholder="{{ t('web.tasks.interval_placeholder') }}">
+                <span class="field-hint">{{ t('web.tasks.interval_hint') }}</span>
+            </div>
+            
+            <div class="btn-row">
+                <button type="button" class="btn" onclick="closeTaskModal()">{{ t('web.common.cancel') }}</button>
+                <button type="submit" class="btn btn-primary">{{ t('web.common.save') }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

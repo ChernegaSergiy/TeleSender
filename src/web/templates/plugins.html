@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "icons.html" import icon_close %}
+{% from "cards.html" import plugin_card %}
+{% set initial_plugins = initial_data.plugins if initial_data is defined and initial_data.plugins is defined else none %}
+{% set plugins_all = initial_plugins or [] %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">{{ t('web.plugins.title') }}</h1>
+    <div class="page-header-actions">
+        <button class="btn btn-sm" onclick="openInstallPluginModal()">{{ t('web.plugins.install') }}</button>
+        <button class="btn btn-sm btn-primary" onclick="openCreatePluginModal()">{{ t('web.plugins.create') }}</button>
+        <button class="btn btn-sm" onclick="openUpdatePluginModal()">{{ t('web.plugins.update') }}</button>
+        <button class="btn btn-sm" onclick="openPluginPagesModal()">{{ t('web.plugins.pages') }}</button>
+    </div>
+</div>
+
+<div class="filters" id="filters">
+    <button class="filter-chip active" data-filter="all">{{ t('web.plugins.filter_all') }} <span class="count" id="count-all">{{ plugins_all|length }}</span></button>
+    <button class="filter-chip" data-filter="loaded">{{ t('web.plugins.filter_loaded') }} <span class="count" id="count-loaded">{{ plugins_all|selectattr('loaded')|list|length }}</span></button>
+    <button class="filter-chip" data-filter="unloaded">{{ t('web.plugins.filter_unloaded') }} <span class="count" id="count-unloaded">{{ plugins_all|rejectattr('loaded')|list|length }}</span></button>
+</div>
+
+<div class="list" id="plugins-list" aria-busy="{{ 'false' if initial_plugins is not none else 'true' }}">{% if initial_plugins is not none %}{% if plugins_all %}{% for plugin in plugins_all %}{{ plugin_card(plugin) }}{% endfor %}{% else %}<div class="empty"><div class="empty-text">{{ t('web.plugins.empty') }}</div></div>{% endif %}{% endif %}</div>
+
+<!-- Plugin pages modal -->
+<div class="modal" id="plugin-pages-modal">
+    <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ t('web.plugins.pages_title') }}</h2>
+            <button class="modal-close" onclick="closePluginPagesModal()" type="button" aria-label="{{ t('web.common.close') }}">{{ icon_close() }}</button>
+        </div>
+        <div class="plugin-pages-modal-body">
+            <p class="field-hint">{{ t('web.plugins.pin_hint') }}</p>
+            <div id="plugin-pages-list">
+                <div class="empty">
+                    <div class="empty-text">{{ t('web.common.loading') }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Install modal -->
+<div class="modal" id="install-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ t('web.plugins.install_title') }}</h2>
+            <button class="modal-close" onclick="closeInstallPluginModal()" type="button" aria-label="{{ t('web.common.close') }}">{{ icon_close() }}</button>
+        </div>
+        <div id="install-form">
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.repo_url') }}</label>
+                <input type="text" class="input" id="install-url" placeholder="https://github.com/user/plugin.git">
+                <span class="field-hint">{{ t('web.plugins.repo_url_hint') }}</span>
+            </div>
+            
+            <div id="install-progress" style="display: none;">
+                <div class="progress-box">
+                    <div class="progress-text" id="progress-text">{{ t('web.plugins.cloning') }}</div>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="btn-row">
+                <button type="button" class="btn" onclick="closeInstallPluginModal()">{{ t('web.common.cancel') }}</button>
+                <button type="button" class="btn btn-primary" id="install-btn" onclick="installPlugin()">{{ t('web.plugins.install') }}</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create modal -->
+<div class="modal" id="create-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ t('web.plugins.create_title') }}</h2>
+            <button class="modal-close" onclick="closeCreatePluginModal()" type="button" aria-label="{{ t('web.common.close') }}">{{ icon_close() }}</button>
+        </div>
+        <div id="create-form">
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.name') }}</label>
+                <input type="text" class="input" id="create-name" placeholder="{{ t('web.plugins.name_placeholder') }}">
+            </div>
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.author') }}</label>
+                <input type="text" class="input" id="create-author" placeholder="{{ t('web.plugins.author_placeholder') }}">
+            </div>
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.description') }}</label>
+                <textarea class="textarea" id="create-description" rows="3" placeholder="{{ t('web.plugins.description_placeholder') }}"></textarea>
+            </div>
+            
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.category') }}</label>
+                <input type="text" class="input" id="create-category" placeholder="{{ t('web.plugins.category_default') }}" value="{{ t('web.plugins.category_default') }}">
+            </div>
+
+            <div class="checkbox-row">
+                <input type="checkbox" id="create-web-page">
+                <label for="create-web-page">{{ t('web.plugins.create_web_page') }}</label>
+            </div>
+            
+            <div class="btn-row">
+                <button type="button" class="btn" onclick="closeCreatePluginModal()">{{ t('web.common.cancel') }}</button>
+                <button type="button" class="btn btn-primary" onclick="createPlugin()">{{ t('web.plugins.create') }}</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Update modal -->
+<div class="modal" id="update-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ t('web.plugins.update_title') }}</h2>
+            <button class="modal-close" onclick="closeUpdatePluginModal()" type="button" aria-label="{{ t('web.common.close') }}">{{ icon_close() }}</button>
+        </div>
+        <div id="update-form">
+            <div class="field">
+                <label class="field-label">{{ t('web.plugins.plugin_name') }}</label>
+                <input type="text" class="input" id="update-name" placeholder="myplugin">
+                <span class="field-hint">{{ t('web.plugins.plugin_name_hint') }}</span>
+            </div>
+            
+            <div id="update-progress" style="display: none;">
+                <div class="progress-box">
+                    <div class="progress-text" id="update-progress-text">{{ t('web.plugins.checking') }}</div>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" id="update-progress-fill"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="update-result" style="display: none;">
+                <div class="progress-box">
+                    <div class="progress-text" id="update-result-text"></div>
+                </div>
+            </div>
+            
+            <div class="btn-row">
+                <button type="button" class="btn" onclick="closeUpdatePluginModal()">{{ t('web.common.cancel') }}</button>
+                <button type="button" class="btn btn-primary" id="update-btn" onclick="updatePlugin()">{{ t('web.plugins.update') }}</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

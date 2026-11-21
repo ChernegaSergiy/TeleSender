@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets and runtime state
+.env
+*.session
+*.session-journal
+data/
+*.log
+
+# Git and editors
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Backups
+tasks_backup.json

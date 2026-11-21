@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "icons.html" import icon_arrow_down %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">{{ t('web.logs.title') }}</h1>
+    <div class="page-header-actions">
+        <button class="btn btn-sm" id="pause-btn" onclick="togglePause()">{{ t('web.logs.pause') }}</button>
+        <button class="btn btn-sm" onclick="saveLogs()">{{ t('web.logs.save') }}</button>
+        <button class="btn btn-sm" onclick="clearLogs()">{{ t('web.logs.clear') }}</button>
+        <button class="btn btn-sm btn-primary" onclick="reconnect()">{{ t('web.logs.reconnect') }}</button>
+    </div>
+</div>
+
+<div class="logs-toolbar">
+    <div class="logs-status">
+        <span class="status-dot" id="ws-status-dot"></span>
+        <span id="ws-status-text">{{ t('web.logs.connecting') }}</span>
+    </div>
+    
+    <div class="logs-filters" id="level-filters">
+        <button class="filter-chip active" data-level="all">{{ t('web.logs.all') }}</button>
+        <button class="filter-chip" data-level="DEBUG">DEBUG</button>
+        <button class="filter-chip" data-level="INFO">INFO</button>
+        <button class="filter-chip" data-level="WARNING">WARN</button>
+        <button class="filter-chip" data-level="ERROR">ERROR</button>
+    </div>
+    
+    <div class="logs-search">
+        <input type="text" class="input input-sm" id="logs-search" placeholder="{{ t('web.logs.search_placeholder') }}" oninput="applyFilters()">
+    </div>
+    
+    <div class="logs-limit">
+        <select class="select select-sm" id="logs-limit" onchange="updateLimit()">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1000</option>
+            <option value="5000">5000</option>
+        </select>
+    </div>
+</div>
+
+<div class="logs-stats">
+    <span class="logs-stat">
+        <span class="log-level-DEBUG">DEBUG</span>
+        <span id="stat-debug">0</span>
+    </span>
+    <span class="logs-stat">
+        <span class="log-level-INFO">INFO</span>
+        <span id="stat-info">0</span>
+    </span>
+    <span class="logs-stat">
+        <span class="log-level-WARNING">WARN</span>
+        <span id="stat-warning">0</span>
+    </span>
+    <span class="logs-stat">
+        <span class="log-level-ERROR">ERROR</span>
+        <span id="stat-error">0</span>
+    </span>
+    <span class="logs-stat logs-stat-total">
+        <span>{{ t('web.logs.total') }}</span>
+        <span id="stat-total">0</span>
+    </span>
+</div>
+
+<div class="logs-wrapper">
+    <div class="logs-container" id="logs-container">
+        <div class="log-line log-placeholder" style="color: #666;">{{ t('web.logs.waiting') }}</div>
+    </div>
+    
+    <button class="logs-scroll-btn" id="scroll-btn" type="button" onclick="scrollToBottom()" style="display: none;" aria-label="{{ t('web.logs.scroll_bottom') }}">
+        {{ icon_arrow_down() }}
+    </button>
+</div>
+{% endblock %}

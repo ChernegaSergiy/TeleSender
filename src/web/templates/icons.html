@@ -1,0 +1,40 @@
+{% macro icon(name, class_name='', style='') -%}
+<svg class="lucide lucide-{{ name }}{% if class_name %} {{ class_name }}{% endif %}" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"{% if style %} style="{{ style }}"{% endif %}><use href="#icon-{{ name }}"></use></svg>
+{%- endmacro %}
+
+{% macro plugin_icon(value) -%}
+{%- set value = (value if value is not none else '')|string|trim -%}
+<span class="nav-item-icon">
+{%- if not value -%}
+{{ icon('pin') }}
+{%- elif value.startswith('<svg') -%}
+{{ value|safe }}
+{%- elif value.startswith('/') or value.startswith('http://') or value.startswith('https://') or value.startswith('data:image/') -%}
+<img src="{{ value }}" alt="">
+{%- elif not value.isascii() -%}
+<span class="nav-item-emoji">{{ value }}</span>
+{%- else -%}
+<i data-lucide="{{ value }}"></i>
+{%- endif -%}
+</span>
+{%- endmacro %}
+
+{% macro icon_close() -%}
+{{ icon('x') }}
+{%- endmacro %}
+
+{% macro icon_arrow_down() -%}
+{{ icon('arrow-down', style='width: 32px; height: 32px;') }}
+{%- endmacro %}
+
+{% macro icon_plus() -%}
+{{ icon('plus') }}
+{%- endmacro %}
+
+{% macro icon_upload() -%}
+{{ icon('upload') }}
+{%- endmacro %}
+
+{% macro icon_pin() -%}
+{{ icon('pin') }}
+{%- endmacro %}

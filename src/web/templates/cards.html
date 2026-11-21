@@ -1,0 +1,93 @@
+{# Server-side card markup for the first paint.
+
+   These macros mirror renderTasks()/renderPlugins() in app.js. Rendering the
+   data into the HTML means the list is already populated when the browser
+   paints the page, so there is no empty flash while app.js downloads and
+   fetches the API. JavaScript re-renders the same markup after revalidation. #}
+{% from "icons.html" import icon %}
+
+{% macro task_card(task) -%}
+{% set status_class = 'badge-success' if task.running else ('badge-warning' if task.active else 'badge-muted') %}
+{% set status_key = 'web.tasks.status_running' if task.running else ('web.tasks.status_active' if task.active else 'web.tasks.status_stopped') %}
+{% set chat_display = (task.chats[0] ~ ' +' ~ (task.chats|length - 1)) if task.chats|length > 1 else (task.chats[0] if task.chats else task.chat) %}
+<div class="task-item">
+    <div class="task-main">
+        <div class="task-title">
+            #{{ task.id }} <span class="badge {{ status_class }}">{{ t(status_key) }}</span>
+            {% if task.is_once %}<span class="badge badge-info">{{ t('web.tasks.badge_once', time=task.once_time or '') }}</span>{% endif %}
+            {% if task.rotation_count > 0 %}<span class="badge badge-info">{{ t('web.tasks.badge_rotation', count=task.rotation_count) }}</span>{% endif %}
+            {% if task.media_path %}<span class="badge badge-info">{{ t('web.tasks.media_' ~ (task.media_type or 'none')) }}</span>{% endif %}
+        </div>
+        <div class="task-chat">{{ chat_display }}</div>
+        {% if task.message %}<div class="task-message">{{ task.message }}</div>{% endif %}
+        <div class="task-meta">
+            <span class="task-meta-item">{{ icon('clock', 'task-meta-icon') }}{{ task.interval }}</span>
+            <span class="task-meta-item">{{ icon('send', 'task-meta-icon') }}{{ t('web.tasks.sent_count', count=task.total_sent) }}</span>
+            {% if task.last_sent %}<span class="task-meta-item">{{ icon('history', 'task-meta-icon') }}{{ task.last_sent }}</span>{% endif %}
+        </div>
+    </div>
+    <div class="task-actions">
+        {% if task.active %}
+            {% if task.running %}
+            <button class="btn btn-sm" onclick="stopTask({{ task.id }})">{{ t('web.tasks.stop') }}</button>
+            {% else %}
+            <button class="btn btn-sm btn-success" onclick="startTask({{ task.id }})">{{ t('web.tasks.start') }}</button>
+            {% endif %}
+            <button class="btn btn-sm btn-danger" onclick="deactivateTask({{ task.id }})">{{ t('web.tasks.deactivate_short') }}</button>
+        {% else %}
+            <button class="btn btn-sm btn-success" onclick="activateTask({{ task.id }})">{{ t('web.tasks.activate') }}</button>
+        {% endif %}
+        <button class="btn btn-sm" onclick="editTask({{ task.id }})">{{ t('web.tasks.edit_short') }}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTask({{ task.id }})">{{ t('web.tasks.delete_short') }}</button>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro plugin_pin_button(plugin_name, page) -%}
+{% set pinned = page.pinned %}
+<button type="button" class="btn btn-sm plugin-pin-btn{{ ' active' if pinned else '' }}" data-plugin="{{ plugin_name }}" data-path="{{ page.path }}" data-pinned="{{ 'true' if pinned else 'false' }}" title="{{ t('web.plugins.unpin' if pinned else 'web.plugins.pin') }}" aria-label="{{ t('web.plugins.unpin' if pinned else 'web.plugins.pin') }}" aria-pressed="{{ 'true' if pinned else 'false' }}">{{ icon('pin') }}</button>
+{%- endmacro %}
+
+{% macro plugin_card(plugin) -%}
+{% set status_class = 'badge-success' if plugin.loaded else 'badge-muted' %}
+{% set status_key = 'web.plugins.status_loaded' if plugin.loaded else 'web.plugins.status_unloaded' %}
+{% set category_name = t('web.plugins.category_default') if plugin.category == 'General' else plugin.category %}
+<div class="plugin-item">
+    <div class="plugin-main">
+        <div class="plugin-title">
+            {{ plugin.name }}
+            <span class="plugin-version">v{{ plugin.version }}</span>
+            <span class="badge {{ status_class }}">{{ t(status_key) }}</span>
+            {% if category_name %}<span class="badge badge-info">{{ category_name }}</span>{% endif %}
+        </div>
+        <div class="plugin-meta">
+            <span>{{ plugin.author }}</span>
+            <span>{{ plugin.id }}</span>
+        </div>
+        {% if plugin.description %}<div class="plugin-description">{{ plugin.description }}</div>{% endif %}
+        {% if plugin.loaded %}
+            {% set parts = [] %}
+            {% if plugin.handlers.commands > 0 %}{% set _ = parts.append(t('web.plugins.handlers_commands', count=plugin.handlers.commands)) %}{% endif %}
+            {% if plugin.handlers.watchers > 0 %}{% set _ = parts.append(t('web.plugins.handlers_watchers', count=plugin.handlers.watchers)) %}{% endif %}
+            {% if plugin.handlers.loops > 0 %}{% set _ = parts.append(t('web.plugins.handlers_loops', count=plugin.handlers.loops)) %}{% endif %}
+            {% if parts %}<div class="plugin-handlers">{{ parts|join(' · ') }}</div>{% endif %}
+        {% endif %}
+        {% if plugin.pages %}
+        <div class="plugin-pages">
+            {% for page in plugin.pages %}
+            <span class="plugin-page-group"><a class="btn btn-sm" href="{{ page.url }}">{{ page.title }}</a>{{ plugin_pin_button(plugin.name, page) }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    <div class="plugin-actions">
+        {% if plugin.loaded %}
+        <button class="btn btn-sm" onclick="reloadPlugin('{{ plugin.name }}')">{{ t('web.plugins.reload') }}</button>
+        <button class="btn btn-sm btn-danger" onclick="unloadPlugin('{{ plugin.name }}')">{{ t('web.plugins.unload') }}</button>
+        {% else %}
+        <button class="btn btn-sm btn-success" onclick="loadPluginByName('{{ plugin.name }}')">{{ t('web.plugins.load') }}</button>
+        {% endif %}
+        <button class="btn btn-sm btn-danger" onclick="deletePlugin('{{ plugin.name }}')">{{ t('web.plugins.delete') }}</button>
+    </div>
+</div>
+{%- endmacro %}

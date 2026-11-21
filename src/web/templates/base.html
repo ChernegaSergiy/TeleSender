@@ -1,0 +1,92 @@
+{% from "icons.html" import icon, plugin_icon %}
+<!DOCTYPE html>
+<html lang="{{ current_lang or 'uk' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f4f4f0">
+    <title>{{ t(title_key) if title_key else t('web.title') }} — TeleSender</title>
+    <link rel="icon" href="/assets/logo.png" type="image/png">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.0">
+</head>
+<body>
+    {% include "sprite.html" %}
+    {% set authed = (not config.web_auth_enabled) or request.get('web_session') %}
+    {% set show_nav = authed and request.path != '/login' %}
+
+    <header class="site-header">
+        <div class="site-header-inner">
+            <a href="/" class="logo">
+                <span class="logo-icon"><img class="logo-mark" src="/assets/logo.svg" alt=""></span>
+                <span>TELESENDER</span>
+            </a>
+            {% if show_nav %}
+            <div class="header-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">{{ t('web.common.online') }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </header>
+
+    <nav class="bottom-nav">
+        <div class="bottom-nav-inner">
+            {% if show_nav %}
+            <a href="/" class="nav-item {% if active == 'dashboard' %}active{% endif %}">
+                <span class="nav-item-icon">{{ icon('layout-dashboard') }}</span>
+                <span class="nav-item-label">{{ t('web.nav.dashboard') }}</span>
+            </a>
+            <a href="/tasks" class="nav-item {% if active == 'tasks' %}active{% endif %}">
+                <span class="nav-item-icon">{{ icon('logs') }}</span>
+                <span class="nav-item-label">{{ t('web.nav.tasks') }}</span>
+            </a>
+            <a href="/plugins" class="nav-item {% if active == 'plugins' %}active{% endif %}">
+                <span class="nav-item-icon">{{ icon('puzzle') }}</span>
+                <span class="nav-item-label">{{ t('web.nav.plugins') }}</span>
+            </a>
+            <a href="/logs" class="nav-item {% if active == 'logs' %}active{% endif %}">
+                <span class="nav-item-icon">{{ icon('terminal') }}</span>
+                <span class="nav-item-label">{{ t('web.nav.logs') }}</span>
+            </a>
+            <a href="/settings" class="nav-item {% if active == 'settings' %}active{% endif %}">
+                <span class="nav-item-icon">{{ icon('settings') }}</span>
+                <span class="nav-item-label">{{ t('web.nav.settings') }}</span>
+            </a>
+            {% for item in plugin_menu_items %}
+            <a href="{{ item.url }}" class="nav-item plugin-pinned-nav-item{% if active == item.active_key or request.path == item.path %} active{% endif %}" data-plugin="{{ item.plugin }}" data-page-path="{{ item.path }}">
+                {{ plugin_icon(item.icon) }}
+                <span class="nav-item-label">{{ item.name }}</span>
+            </a>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </nav>
+
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <div class="modal app-dialog" id="app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
+        <div class="modal-content app-dialog-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="app-dialog-title"></h2>
+                <button class="modal-close" type="button" id="app-dialog-close" aria-label="{{ t('web.common.close') }}">{{ icon('x') }}</button>
+            </div>
+            <div class="app-dialog-body">
+                <p class="app-dialog-message" id="app-dialog-message"></p>
+            </div>
+            <div class="app-dialog-actions">
+                <button type="button" class="btn" id="app-dialog-cancel"></button>
+                <button type="button" class="btn btn-primary" id="app-dialog-confirm"></button>
+            </div>
+        </div>
+    </div>
+
+    <script>window.WEB_I18N = {{ {"web": web_i18n}|tojson }};</script>
+    {% if initial_data %}
+    <script>window.__INITIAL_DATA__ = {{ initial_data|tojson }};</script>
+    {% endif %}
+    <script src="/static/lucide.min.js"></script>
+    <script src="/static/app.js?v=1.0.0"></script>
+</body>
+</html>

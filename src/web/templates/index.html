@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">{{ t('web.dashboard.title') }}</h1>
+
+<div class="grid grid-4">
+    <div class="stat-card">
+        <div class="stat-label">{{ t('web.dashboard.tasks_total') }}</div>
+        <div class="stat-value" id="tasks-total">—</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">{{ t('web.dashboard.tasks_active') }}</div>
+        <div class="stat-value success" id="tasks-active">—</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">{{ t('web.dashboard.tasks_running') }}</div>
+        <div class="stat-value warning" id="tasks-running">—</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-label">{{ t('web.dashboard.total_sent') }}</div>
+        <div class="stat-value" id="total-sent">—</div>
+    </div>
+</div>
+
+<h2 class="section-title">{{ t('web.dashboard.bot_info') }}</h2>
+
+<div class="card">
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.name') }}</span>
+        <span class="info-value" id="bot-name">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.username') }}</span>
+        <span class="info-value" id="bot-username">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.user_id') }}</span>
+        <span class="info-value" id="bot-id">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.phone') }}</span>
+        <span class="info-value" id="bot-phone">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.session') }}</span>
+        <span class="info-value" id="bot-session">—</span>
+    </div>
+</div>
+
+<h2 class="section-title">{{ t('web.dashboard.info') }}</h2>
+
+<div class="card">
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.version') }}</span>
+        <span class="info-value">1.0.0</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.plugins') }}</span>
+        <span class="info-value" id="plugins-count">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.uptime') }}</span>
+        <span class="info-value" id="uptime">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.last_start') }}</span>
+        <span class="info-value" id="last-start">—</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">{{ t('web.dashboard.status') }}</span>
+        <span class="info-value">
+            <span class="status-dot" id="status-dot-inline"></span>
+            <span id="status-text-inline">{{ t('web.common.online') }}</span>
+        </span>
+    </div>
+</div>
+{% endblock %}

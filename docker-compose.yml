@@ -1,0 +1,59 @@
+# TeleSender in Docker.
+#
+# The container runs as UID/GID 1000 ("telesender"). The bind-mounted
+# directories must be writable by that user:
+#   sudo chown -R 1000:1000 data plugins languages gallery
+#
+# First run needs a TTY because Telethon asks for the login code:
+#   docker compose run --rm telesender
+# Later runs:
+#   docker compose up -d
+
+services:
+  telesender:
+    build: .
+    image: telesender:latest
+    container_name: telesender
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+    # The interactive console menu and first-time Telegram login need a TTY.
+    stdin_open: true
+    tty: true
+
+    # The image runs as UID/GID 1000. If you do not want to chown the mounted
+    # folders, run as root instead by uncommenting the next line:
+    # user: "0:0"
+
+    env_file:
+      - .env
+    environment:
+      # Inside the container the web UI must listen on all interfaces.
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8000"
+      TZ: ${TZ:-Europe/Kyiv}
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # Telegram sessions, SQLite database, logs.
+      - ./data:/app/data
+      # Editable without rebuilding the image.
+      - ./plugins:/app/plugins
+      - ./languages:/app/languages
+      - ./gallery:/app/gallery
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
