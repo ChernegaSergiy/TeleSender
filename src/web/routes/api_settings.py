@@ -115,6 +115,8 @@ class SettingsApiRoutes:
             data = await request.json()
         except Exception:
             return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
 
         enabled = bool(data.get("enabled", False))
 
@@ -182,8 +184,10 @@ class SettingsApiRoutes:
             data = await request.json()
         except Exception:
             return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
 
-        lang_code = (data.get("language") or "").strip().lower()
+        lang_code = str(data.get("language") or "").strip().lower()
         if lang_code not in SUPPORTED_LANGUAGES:
             return web.json_response({"error": lang.get("web.errors.unsupported_language", "Unsupported language")}, status=400)
 

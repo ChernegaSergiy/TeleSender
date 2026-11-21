@@ -7,6 +7,7 @@ import json
 from aiohttp import web
 
 from src.services.logger import log
+from src.services.path_security import validate_media_path
 from src.services.translator import lang
 from src.web.plugin_routes import invalidate_web_caches
 
@@ -125,43 +126,137 @@ class TaskApiRoutes:
             "chats_list": valid_chats,
         })
 
+    @staticmethod
+    def _bad_request(message: str, status: int = 400):
+        return web.json_response({"error": message}, status=status)
+
+    @staticmethod
+    def _parse_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(int(value))
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in {"1", "true", "yes", "on"}:
+                return True
+            if v in {"0", "false", "no", "off", ""}:
+                return False
+        return default
+
+    @staticmethod
+    def _normalize_chats(data: dict):
+        raw = data.get("chats", [])
+        if raw is None:
+            raw = []
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list):
+            return None, "chats must be a list"
+        chats = []
+        for item in raw:
+            if not isinstance(item, (str, int)):
+                return None, "chat must be a string"
+            value = str(item).strip()
+            if value:
+                chats.append(value)
+        if not chats:
+            chat = data.get("chat")
+            if isinstance(chat, (str, int)) and str(chat).strip():
+                chats = [str(chat).strip()]
+        return chats, None
+
+    @staticmethod
+    def _normalize_messages_list(data: dict):
+        raw = data.get("messages_list")
+        if raw is None:
+            return None, None
+        if not isinstance(raw, list):
+            return None, "messages_list must be a list"
+        messages = []
+        for item in raw:
+            if not isinstance(item, str):
+                return None, "messages_list items must be strings"
+            value = item.strip()
+            if value:
+                messages.append(value)
+        return (messages or None), None
+
+    @staticmethod
+    def _normalize_media_type(value):
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            return "__invalid__"
+        allowed = {"photo", "video", "document", "audio", "sticker", "gif", "voice", "video_note"}
+        v = value.strip().lower()
+        if v not in allowed:
+            return "__invalid__"
+        return v
+
     async def create(self, request):
         self._ensure_bot()
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
+            return self._bad_request(lang.get("web.errors.invalid_json", "Invalid JSON"))
+        if not isinstance(data, dict):
+            return self._bad_request(lang.get("web.errors.invalid_json", "Invalid JSON"))
 
-        chats = data.get("chats", [])
+        chats, chats_err = self._normalize_chats(data)
+        if chats_err:
+            return self._bad_request(chats_err)
         if not chats:
-            chat = (data.get("chat") or "").strip()
-            if chat:
-                chats = [chat]
-
-        if not chats:
-            return web.json_response({"error": lang.get("web.errors.chat_required", "Chat is required")}, status=400)
+            return self._bad_request(lang.get("web.errors.chat_required", "Chat is required"))
 
         message = data.get("message", "")
-        media_path = data.get("media_path") or None
-        media_type = data.get("media_type") or None
-        messages_list = data.get("messages_list") or None
-        is_once = data.get("is_once", 0)
-        once_time_str = data.get("once_time")
+        if message is None:
+            message = ""
+        if not isinstance(message, str):
+            return self._bad_request("message must be a string")
+        message = message.strip()
+
+        raw_media_path = data.get("media_path")
+        if raw_media_path is not None and not isinstance(raw_media_path, str):
+            return self._bad_request("media_path must be a string")
+        try:
+            media_path = validate_media_path(raw_media_path)
+        except ValueError as e:
+            return self._bad_request(str(e))
+
+        media_type = self._normalize_media_type(data.get("media_type"))
+        if media_type == "__invalid__":
+            return self._bad_request("Invalid media_type")
+
+        messages_list, msg_err = self._normalize_messages_list(data)
+        if msg_err:
+            return self._bad_request(msg_err)
+
+        is_once = self._parse_bool(data.get("is_once", 0), default=False)
+        once_time_raw = data.get("once_time")
+        if once_time_raw is not None and not isinstance(once_time_raw, str):
+            return self._bad_request("once_time must be a string")
+        once_time_str = (once_time_raw or "").strip()
 
         if not message and not media_path and not messages_list:
-            return web.json_response({"error": lang.get("web.errors.content_required", "Text, media or rotation required")}, status=400)
+            return self._bad_request(lang.get("web.errors.content_required", "Text, media or rotation required"))
 
-        interval_str = data.get("interval", "60")
+        interval_raw = data.get("interval", "60")
+        if not isinstance(interval_raw, (str, int, float)):
+            return self._bad_request(lang.get("web.errors.invalid_interval", "Invalid interval"))
+        interval_str = str(interval_raw).strip()
         scheduler = getattr(self.bot, "scheduler_service", None)
         cfg = scheduler.parse_interval(interval_str) if scheduler else {"type": "interval", "seconds": 60}
         if not cfg:
-            return web.json_response({"error": lang.get("web.errors.invalid_interval", "Invalid interval")}, status=400)
+            return self._bad_request(lang.get("web.errors.invalid_interval", "Invalid interval"))
 
         once_time = None
-        if is_once and scheduler:
+        if is_once:
+            if not scheduler:
+                return self._bad_request(lang.get("web.errors.invalid_once_time", "Invalid once time format"))
             once_time = scheduler.parse_once(once_time_str)
             if not once_time:
-                return web.json_response({"error": lang.get("web.errors.invalid_once_time", "Invalid once time format")}, status=400)
+                return self._bad_request(lang.get("web.errors.invalid_once_time", "Invalid once time format"))
 
         chats_json = json.dumps(chats) if len(chats) > 1 else None
         main_chat = chats[0]
@@ -173,7 +268,7 @@ class TaskApiRoutes:
             media_path=media_path,
             media_type=media_type,
             interval_config=cfg,
-            is_once=is_once,
+            is_once=1 if is_once else 0,
             once_time=once_time.strftime("%Y-%m-%d %H:%M:%S") if once_time else None,
             messages_list=messages_list,
             chats_list=chats_json,
@@ -187,37 +282,88 @@ class TaskApiRoutes:
         self._ensure_bot()
         try:
             tid = int(request.match_info["id"])
+        except Exception:
+            return self._bad_request(lang.get("web.errors.invalid_id", "Invalid ID"))
+        try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": lang.get("web.errors.invalid_request", "Invalid request")}, status=400)
+            return self._bad_request(lang.get("web.errors.invalid_json", "Invalid JSON"))
+        if not isinstance(data, dict):
+            return self._bad_request(lang.get("web.errors.invalid_json", "Invalid JSON"))
 
         task = self.bot.db.get_one(tid)
         if not task:
             return web.json_response({"error": lang.get("web.errors.task_not_found", "Task not found")}, status=404)
 
-        chats = data.get("chats", [])
-        if chats:
-            self.bot.db.update_task(tid, chat_id=chats[0], chats_list=chats if len(chats) > 1 else None)
+        scheduler = getattr(self.bot, "scheduler_service", None)
+        updates = {}
+
+        if "chats" in data or "chat" in data:
+            chats, chats_err = self._normalize_chats(data)
+            if chats_err:
+                return self._bad_request(chats_err)
+            if chats:
+                updates["chat_id"] = chats[0]
+                updates["chats_list"] = chats if len(chats) > 1 else None
 
         if "message" in data:
-            self.bot.db.update_task(tid, message=data["message"])
+            message = data.get("message")
+            if message is None:
+                message = ""
+            if not isinstance(message, str):
+                return self._bad_request("message must be a string")
+            updates["message"] = message.strip()
+
         if "media_path" in data:
-            self.bot.db.update_task(tid, media_path=data["media_path"] or "")
+            raw_media_path = data.get("media_path")
+            if raw_media_path is not None and not isinstance(raw_media_path, str):
+                return self._bad_request("media_path must be a string")
+            try:
+                media_path = validate_media_path(raw_media_path)
+            except ValueError as e:
+                return self._bad_request(str(e))
+            updates["media_path"] = media_path or ""
+
         if "media_type" in data:
-            self.bot.db.update_task(tid, media_type=data["media_type"] or "")
+            media_type = self._normalize_media_type(data.get("media_type"))
+            if media_type == "__invalid__":
+                return self._bad_request("Invalid media_type")
+            updates["media_type"] = media_type or ""
+
         if "messages_list" in data:
-            self.bot.db.update_task(tid, messages_list=data["messages_list"] or None)
+            messages_list, msg_err = self._normalize_messages_list(data)
+            if msg_err:
+                return self._bad_request(msg_err)
+            updates["messages_list"] = messages_list
 
-        scheduler = getattr(self.bot, "scheduler_service", None)
         if "is_once" in data:
-            is_once = data["is_once"]
-            once_time = scheduler.parse_once(data.get("once_time", "")) if (is_once and scheduler) else None
-            self.bot.db.update_task(tid, is_once=1 if is_once else 0, once_time=once_time)
+            is_once = self._parse_bool(data.get("is_once", 0), default=False)
+            once_time_raw = data.get("once_time", "")
+            if once_time_raw is not None and not isinstance(once_time_raw, str):
+                return self._bad_request("once_time must be a string")
+            once_time = None
+            if is_once:
+                if not scheduler:
+                    return self._bad_request(lang.get("web.errors.invalid_once_time", "Invalid once time format"))
+                once_time = scheduler.parse_once(str(once_time_raw or "").strip())
+                if not once_time:
+                    return self._bad_request(lang.get("web.errors.invalid_once_time", "Invalid once time format"))
+            updates["is_once"] = 1 if is_once else 0
+            updates["once_time"] = once_time
 
-        if "interval" in data and scheduler:
-            cfg = scheduler.parse_interval(data["interval"])
-            if cfg:
-                self.bot.db.update_task(tid, interval_config=cfg)
+        if "interval" in data:
+            interval_raw = data.get("interval")
+            if not isinstance(interval_raw, (str, int, float)):
+                return self._bad_request(lang.get("web.errors.invalid_interval", "Invalid interval"))
+            if not scheduler:
+                return self._bad_request(lang.get("web.errors.invalid_interval", "Invalid interval"))
+            cfg = scheduler.parse_interval(str(interval_raw).strip())
+            if not cfg:
+                return self._bad_request(lang.get("web.errors.invalid_interval", "Invalid interval"))
+            updates["interval_config"] = cfg
+
+        if updates:
+            self.bot.db.update_task(tid, **updates)
 
         task_service = getattr(self.bot, "task_service", None)
         if task_service and tid in task_service.running:

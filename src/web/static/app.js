@@ -119,7 +119,7 @@ function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function tr(key, vars) {
+function tr(key, vars, plain = false) {
     let value = window.WEB_I18N || {};
     const parts = key.split('.');
     if (parts[0] === 'web') {
@@ -139,7 +139,8 @@ function tr(key, vars) {
 
     if (vars) {
         for (const [name, replacement] of Object.entries(vars)) {
-            value = value.split(`{${name}}`).join(String(replacement));
+            const safe = plain ? String(replacement) : escapeHtml(String(replacement));
+            value = value.split(`{${name}}`).join(safe);
         }
     }
     return value;
@@ -216,16 +217,16 @@ function showAppDialog(options) {
     appDialogLastFocus = document.activeElement;
 
     document.getElementById('app-dialog-title').textContent = opts.title
-        || tr(isConfirm ? 'web.common.confirm_title' : 'web.common.notice');
+        || tr(isConfirm ? 'web.common.confirm_title' : 'web.common.notice', null, true);
     document.getElementById('app-dialog-message').textContent = opts.message || '';
 
     const cancelBtn = document.getElementById('app-dialog-cancel');
     const confirmBtn = document.getElementById('app-dialog-confirm');
 
     cancelBtn.style.display = isConfirm ? '' : 'none';
-    cancelBtn.textContent = opts.cancelText || tr('web.common.cancel');
+    cancelBtn.textContent = opts.cancelText || tr('web.common.cancel', null, true);
     confirmBtn.textContent = opts.confirmText
-        || tr(isConfirm ? 'web.common.confirm' : 'web.common.close');
+        || tr(isConfirm ? 'web.common.confirm' : 'web.common.close', null, true);
     confirmBtn.classList.toggle('btn-danger', !!opts.danger);
     confirmBtn.classList.toggle('btn-primary', !opts.danger);
 
@@ -408,9 +409,9 @@ function renderTasks() {
                 <div class="task-chat">${escapeHtml(chatDisplay)}</div>
                 ${t.message ? `<div class="task-message">${escapeHtml(t.message)}</div>` : ''}
                 <div class="task-meta">
-                    <span class="task-meta-item">${CLOCK_ICON}${t.interval}</span>
+                    <span class="task-meta-item">${CLOCK_ICON}${escapeHtml(t.interval)}</span>
                     <span class="task-meta-item">${SEND_ICON}${tr('web.tasks.sent_count', {count: t.total_sent})}</span>
-                    ${t.last_sent ? `<span class="task-meta-item">${HISTORY_ICON}${t.last_sent}</span>` : ''}
+                    ${t.last_sent ? `<span class="task-meta-item">${HISTORY_ICON}${escapeHtml(t.last_sent)}</span>` : ''}
                 </div>
             </div>
             <div class="task-actions">
@@ -430,7 +431,7 @@ async function startTask(id) {
         await apiPost(`/api/tasks/${id}/start`);
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -439,7 +440,7 @@ async function stopTask(id) {
         await apiPost(`/api/tasks/${id}/stop`);
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -448,33 +449,33 @@ async function activateTask(id) {
         await apiPost(`/api/tasks/${id}/activate`);
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function deactivateTask(id) {
-    if (!await showConfirm(tr('web.tasks.confirm_deactivate', {id}), {danger: true})) return;
+    if (!await showConfirm(tr('web.tasks.confirm_deactivate', {id}, true), {danger: true})) return;
     try {
         await apiPost(`/api/tasks/${id}/deactivate`);
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function deleteTask(id) {
-    if (!await showConfirm(tr('web.tasks.confirm_delete', {id}), {danger: true})) return;
+    if (!await showConfirm(tr('web.tasks.confirm_delete', {id}, true), {danger: true})) return;
     try {
         await apiDelete(`/api/tasks/${id}`);
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function stopAllTasks() {
     if (tasks.filter(t => t.running).length === 0) {
-        await showAlert(tr('web.tasks.no_running'));
+        await showAlert(tr('web.tasks.no_running', null, true));
         return;
     }
     
@@ -482,23 +483,23 @@ async function stopAllTasks() {
         await apiPost('/api/tasks/stop-all');
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function deactivateAllTasks() {
     if (tasks.filter(t => t.active).length === 0) {
-        await showAlert(tr('web.tasks.no_active'));
+        await showAlert(tr('web.tasks.no_active', null, true));
         return;
     }
     
-    if (!await showConfirm(tr('web.tasks.confirm_deactivate_all'), {danger: true})) return;
+    if (!await showConfirm(tr('web.tasks.confirm_deactivate_all', null, true), {danger: true})) return;
     
     try {
         await apiPost('/api/tasks/deactivate-all');
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -518,7 +519,7 @@ function openCreateTaskModal() {
     const mediaFile = document.getElementById('task-media-file');
     if (mediaFile) mediaFile.value = '';
     const uploadStatus = document.getElementById('media-upload-status');
-    if (uploadStatus) uploadStatus.textContent = tr('web.tasks.media_upload_hint');
+    if (uploadStatus) uploadStatus.textContent = tr('web.tasks.media_upload_hint', null, true);
     
     const rotationCheckbox = document.getElementById('task-rotation');
     const onceCheckbox = document.getElementById('task-once');
@@ -534,7 +535,7 @@ function openCreateTaskModal() {
     if (rotationContainer) rotationContainer.style.opacity = '1';
     if (onceContainer) onceContainer.style.opacity = '1';
     
-    document.getElementById('modal-title').textContent = tr('web.tasks.new_task');
+    document.getElementById('modal-title').textContent = tr('web.tasks.new_task', null, true);
     
     document.getElementById('rotation-field').style.display = 'none';
     document.getElementById('once-field').style.display = 'none';
@@ -584,7 +585,7 @@ async function editTask(id) {
         const mediaFile = document.getElementById('task-media-file');
         if (mediaFile) mediaFile.value = '';
         const uploadStatus = document.getElementById('media-upload-status');
-        if (uploadStatus) uploadStatus.textContent = tr('web.tasks.media_upload_hint');
+        if (uploadStatus) uploadStatus.textContent = tr('web.tasks.media_upload_hint', null, true);
         
         const msgList = data.messages_list || [];
         const rotationCheckbox = document.getElementById('task-rotation');
@@ -620,14 +621,14 @@ async function editTask(id) {
         }
         document.getElementById('task-interval').value = intervalStr;
         
-        document.getElementById('modal-title').textContent = tr('web.tasks.edit_task', {id});
+        document.getElementById('modal-title').textContent = tr('web.tasks.edit_task', {id}, true);
         
         toggleRotation();
         toggleOnce();
         
         document.getElementById('task-modal').classList.add('open');
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -653,7 +654,7 @@ function uploadTaskMedia(event) {
     const pathInput = document.getElementById('task-media-path');
     const typeSelect = document.getElementById('task-media-type');
 
-    if (status) status.textContent = tr('web.tasks.media_uploading');
+    if (status) status.textContent = tr('web.tasks.media_uploading', null, true);
     if (button) button.disabled = true;
 
     const form = new FormData();
@@ -665,7 +666,7 @@ function uploadTaskMedia(event) {
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && status) {
             const percent = Math.round((e.loaded / e.total) * 100);
-            status.textContent = `${tr('web.tasks.media_uploading')} ${percent}%`;
+            status.textContent = `${tr('web.tasks.media_uploading', null, true)} ${percent}%`;
         }
     };
 
@@ -682,20 +683,20 @@ function uploadTaskMedia(event) {
                 typeSelect.value = data.media_type;
                 toggleMediaPath();
             }
-            if (status) status.textContent = tr('web.tasks.media_uploaded', {name: data.name});
+            if (status) status.textContent = tr('web.tasks.media_uploaded', {name: data.name}, true);
             return;
         }
 
         const message = (data && data.error) || `HTTP ${xhr.status}`;
-        if (status) status.textContent = tr('web.tasks.media_upload_hint');
-        await showAlert(tr('web.tasks.media_upload_error', {error: message}));
+        if (status) status.textContent = tr('web.tasks.media_upload_hint', null, true);
+        await showAlert(tr('web.tasks.media_upload_error', {error: message}, true));
     };
 
     xhr.onerror = async () => {
         if (button) button.disabled = false;
         input.value = '';
-        if (status) status.textContent = tr('web.tasks.media_upload_hint');
-        await showAlert(tr('web.tasks.media_upload_error', {error: tr('web.common.unknown_error')}));
+        if (status) status.textContent = tr('web.tasks.media_upload_hint', null, true);
+        await showAlert(tr('web.tasks.media_upload_error', {error: tr('web.common.unknown_error')}, true));
     };
 
     xhr.send(form);
@@ -798,7 +799,7 @@ async function saveTask(event) {
     
     const chats = chatInput.split(',').map(c => c.trim()).filter(c => c);
     if (chats.length === 0) {
-        await showAlert(tr('web.tasks.error_no_chats'));
+        await showAlert(tr('web.tasks.error_no_chats', null, true));
         return;
     }
     
@@ -806,25 +807,25 @@ async function saveTask(event) {
     if (useRotation && rotationMessages.trim()) {
         messagesList = rotationMessages.split('===').map(m => m.trim()).filter(m => m);
         if (messagesList.length < 2) {
-            await showAlert(tr('web.tasks.error_rotation_min'));
+            await showAlert(tr('web.tasks.error_rotation_min', null, true));
             return;
         }
     }
     
     if (useRotation) {
         if (!messagesList) {
-            await showAlert(tr('web.tasks.error_rotation_empty'));
+            await showAlert(tr('web.tasks.error_rotation_empty', null, true));
             return;
         }
     } else {
         if (!message && !mediaPath) {
-            await showAlert(tr('web.tasks.error_no_content'));
+            await showAlert(tr('web.tasks.error_no_content', null, true));
             return;
         }
     }
     
     if (isOnce && !onceTime) {
-        await showAlert(tr('web.tasks.error_once_time'));
+        await showAlert(tr('web.tasks.error_once_time', null, true));
         return;
     }
     
@@ -850,7 +851,7 @@ async function saveTask(event) {
             taskId = result.id;
             
             if (!isOnce) {
-                const runNow = await showConfirm(tr('web.tasks.created_run_now', {id: taskId}));
+                const runNow = await showConfirm(tr('web.tasks.created_run_now', {id: taskId}, true));
                 if (runNow) {
                     await apiPost(`/api/tasks/${taskId}/start`);
                 }
@@ -860,7 +861,7 @@ async function saveTask(event) {
         closeTaskModal();
         await loadTasks();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -994,17 +995,17 @@ async function loadPluginByName(name) {
         await apiPost(`/api/plugins/${name}/load`);
         await loadPlugins();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function unloadPlugin(name) {
-    if (!await showConfirm(tr('web.plugins.confirm_unload', {name}), {danger: true})) return;
+    if (!await showConfirm(tr('web.plugins.confirm_unload', {name}, true), {danger: true})) return;
     try {
         await apiPost(`/api/plugins/${name}/unload`);
         await loadPlugins();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -1013,17 +1014,17 @@ async function reloadPlugin(name) {
         await apiPost(`/api/plugins/${name}/reload`);
         await loadPlugins();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
 async function deletePlugin(name) {
-    if (!await showConfirm(tr('web.plugins.confirm_delete', {name}), {danger: true})) return;
+    if (!await showConfirm(tr('web.plugins.confirm_delete', {name}, true), {danger: true})) return;
     try {
         await apiDelete(`/api/plugins/${name}`);
         await loadPlugins();
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -1116,7 +1117,7 @@ async function setPluginPagePinned(pluginName, pagePath, pinned) {
             renderPluginPagesModal();
         }
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -1236,7 +1237,7 @@ function closeInstallPluginModal() {
 async function installPlugin() {
     const url = document.getElementById('install-url').value.trim();
     if (!url) {
-        await showAlert(tr('web.plugins.error_url'));
+        await showAlert(tr('web.plugins.error_url', null, true));
         return;
     }
     
@@ -1247,7 +1248,7 @@ async function installPlugin() {
     
     btn.disabled = true;
     progress.style.display = 'block';
-    progressText.textContent = tr('web.plugins.cloning');
+    progressText.textContent = tr('web.plugins.cloning', null, true);
     progressFill.style.width = '30%';
     
     try {
@@ -1257,7 +1258,7 @@ async function installPlugin() {
         const result = await apiPost('/api/plugins/install', {url});
         
         progressFill.style.width = '100%';
-        progressText.textContent = tr('web.plugins.installed', {name: result.name, version: result.version});
+        progressText.textContent = tr('web.plugins.installed', {name: result.name, version: result.version}, true);
         
         setTimeout(() => {
             closeInstallPluginModal();
@@ -1267,7 +1268,7 @@ async function installPlugin() {
     } catch (e) {
         progress.style.display = 'none';
         btn.disabled = false;
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -1294,7 +1295,7 @@ async function createPlugin() {
     const createWebPage = document.getElementById('create-web-page').checked;
     
     if (!name) {
-        await showAlert(tr('web.plugins.error_name'));
+        await showAlert(tr('web.plugins.error_name', null, true));
         return;
     }
     
@@ -1302,9 +1303,9 @@ async function createPlugin() {
         const result = await apiPost('/api/plugins/create', {name, author, description, category, create_web_page: createWebPage});
         closeCreatePluginModal();
         await loadPlugins();
-        await showAlert(tr('web.plugins.created', {name: result.name, id: result.id, path: result.path}));
+        await showAlert(tr('web.plugins.created', {name: result.name, id: result.id, path: result.path}, true));
     } catch (e) {
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     }
 }
 
@@ -1325,7 +1326,7 @@ function closeUpdatePluginModal() {
 async function updatePlugin(force = false) {
     const name = document.getElementById('update-name').value.trim();
     if (!name) {
-        await showAlert(tr('web.plugins.error_plugin_name'));
+        await showAlert(tr('web.plugins.error_plugin_name', null, true));
         return;
     }
     
@@ -1339,12 +1340,12 @@ async function updatePlugin(force = false) {
     btn.disabled = true;
     progress.style.display = 'block';
     result.style.display = 'none';
-    progressText.textContent = tr('web.plugins.checking');
+    progressText.textContent = tr('web.plugins.checking', null, true);
     progressFill.style.width = '30%';
     
     try {
         setTimeout(() => {
-            progressText.textContent = tr('web.plugins.pulling');
+            progressText.textContent = tr('web.plugins.pulling', null, true);
             progressFill.style.width = '60%';
         }, 1000);
         setTimeout(() => { progressFill.style.width = '80%'; }, 3000);
@@ -1370,18 +1371,18 @@ async function updatePlugin(force = false) {
             const confirmRollback = await showConfirm(tr('web.plugins.confirm_rollback', {
                 old: data.old_version,
                 new: data.new_version,
-            }), {danger: true});
+            }, true), {danger: true});
             
             if (confirmRollback) {
                 await updatePlugin(true);
                 return;
             } else {
-                resultText.textContent = tr('web.plugins.cancelled');
+                resultText.textContent = tr('web.plugins.cancelled', null, true);
                 resultText.style.color = 'var(--muted)';
                 btn.disabled = false;
             }
         } else {
-            resultText.textContent = data.message || tr('web.plugins.updated');
+            resultText.textContent = data.message || tr('web.plugins.updated', null, true);
             resultText.style.color = 'var(--muted)';
             btn.disabled = false;
         }
@@ -1389,7 +1390,7 @@ async function updatePlugin(force = false) {
     } catch (e) {
         progress.style.display = 'none';
         result.style.display = 'block';
-        resultText.textContent = tr('web.common.error', {error: e.message});
+        resultText.textContent = tr('web.common.error', {error: e.message}, true);
         resultText.style.color = 'var(--accent)';
         btn.disabled = false;
     }
@@ -1708,10 +1709,10 @@ function setWsStatus(status) {
     
     if (status === 'connected') {
         dot.classList.add('connected');
-        text.textContent = usingPolling ? tr('web.logs.polling') : tr('web.logs.connected');
+        text.textContent = usingPolling ? tr('web.logs.polling', null, true) : tr('web.logs.connected', null, true);
     } else {
         dot.classList.add('disconnected');
-        text.textContent = tr('web.logs.disconnected');
+        text.textContent = tr('web.logs.disconnected', null, true);
     }
 }
 
@@ -1774,7 +1775,7 @@ function togglePause() {
 function updatePauseButton() {
     const btn = document.getElementById('pause-btn');
     if (btn) {
-        btn.textContent = logsPaused ? tr('web.logs.resume') : tr('web.logs.pause');
+        btn.textContent = logsPaused ? tr('web.logs.resume', null, true) : tr('web.logs.pause', null, true);
     }
 }
 
@@ -1827,7 +1828,7 @@ function updateLimit() {
 
 async function saveLogs() {
     if (allLogs.length === 0) {
-        await showAlert(tr('web.logs.no_logs_to_save'));
+        await showAlert(tr('web.logs.no_logs_to_save', null, true));
         return;
     }
     
@@ -1915,7 +1916,7 @@ function updateLanguageUI(code) {
     currentLanguage = code || 'en';
     document.documentElement.lang = currentLanguage;
     setText('lang-button-label', languageName(currentLanguage));
-    setText('lang-hint', tr('web.settings.current', {lang: languageName(currentLanguage)}));
+    setText('lang-hint', tr('web.settings.current', {lang: languageName(currentLanguage)}, true));
     const container = document.getElementById('language-options');
     if (container) {
         container.querySelectorAll('.language-option').forEach(btn => {
@@ -2031,7 +2032,7 @@ async function toggle2FA() {
     function applyState(enabled) {
         btn.setAttribute('data-enabled', enabled ? 'true' : 'false');
         btn.className = 'btn btn-sm ' + (enabled ? 'btn-primary' : 'btn-secondary');
-        btn.textContent = tr(enabled ? 'web.settings.two_factor_enabled' : 'web.settings.two_factor_disabled');
+        btn.textContent = tr(enabled ? 'web.settings.two_factor_enabled' : 'web.settings.two_factor_disabled', null, true);
     }
 
     twoFactorBusy = true;
@@ -2043,26 +2044,26 @@ async function toggle2FA() {
 
         // Disabling 2FA requires confirmation from the owner's Telegram.
         if (res.pending && res.request_id) {
-            btn.textContent = tr('web.settings.two_factor_waiting');
+            btn.textContent = tr('web.settings.two_factor_waiting', null, true);
             const status = await poll2FAStatus(res.request_id);
             if (status === 'approved') {
                 applyState(false);
-                await showAlert(tr('web.settings.two_factor_alert_disabled'));
+                await showAlert(tr('web.settings.two_factor_alert_disabled', null, true));
             } else {
                 applyState(isCurrentlyEnabled);
                 await showAlert(tr(status === 'rejected'
                     ? 'web.settings.two_factor_confirm_rejected'
-                    : 'web.settings.two_factor_confirm_expired'));
+                    : 'web.settings.two_factor_confirm_expired', null, true));
             }
             return;
         }
 
         const enabled = !!res.enabled;
         applyState(enabled);
-        await showAlert(tr(enabled ? 'web.settings.two_factor_alert_enabled' : 'web.settings.two_factor_alert_disabled'));
+        await showAlert(tr(enabled ? 'web.settings.two_factor_alert_enabled' : 'web.settings.two_factor_alert_disabled', null, true));
     } catch (e) {
         applyState(isCurrentlyEnabled);
-        await showAlert(tr('web.common.error', {error: e.message}));
+        await showAlert(tr('web.common.error', {error: e.message}, true));
     } finally {
         btn.disabled = false;
         twoFactorBusy = false;
@@ -2078,10 +2079,10 @@ function update2FAUI(enabled) {
     btn.setAttribute('data-enabled', enabled ? 'true' : 'false');
     if (enabled) {
         btn.className = 'btn btn-sm btn-primary';
-        btn.textContent = tr('web.settings.two_factor_enabled');
+        btn.textContent = tr('web.settings.two_factor_enabled', null, true);
     } else {
         btn.className = 'btn btn-sm btn-secondary';
-        btn.textContent = tr('web.settings.two_factor_disabled');
+        btn.textContent = tr('web.settings.two_factor_disabled', null, true);
     }
 }
 
@@ -2093,7 +2094,7 @@ async function changeLanguage(code) {
         if (data.warning) await showAlert(data.warning);
         window.location.reload();
     } catch (e) {
-        await showAlert(tr('web.settings.language_error', {error: e.message}));
+        await showAlert(tr('web.settings.language_error', {error: e.message}, true));
     }
 }
 
@@ -2115,7 +2116,7 @@ async function exportTasks() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     } catch (e) {
-        await showAlert(tr('web.settings.export_error', {error: e.message}));
+        await showAlert(tr('web.settings.export_error', {error: e.message}, true));
     }
 }
 
@@ -2132,23 +2133,23 @@ async function importTasks(event) {
         }
 
         const result = await apiPost('/api/settings/import', {tasks});
-        await showAlert(tr('web.settings.imported_count', {count: result.count}));
+        await showAlert(tr('web.settings.imported_count', {count: result.count}, true));
         await loadSettings();
     } catch (e) {
-        await showAlert(tr('web.settings.import_error', {error: e.message}));
+        await showAlert(tr('web.settings.import_error', {error: e.message}, true));
     } finally {
         input.value = '';
     }
 }
 
 async function clearMediaCache() {
-    if (!await showConfirm(tr('web.settings.confirm_clear_cache'), {danger: true})) return;
+    if (!await showConfirm(tr('web.settings.confirm_clear_cache', null, true), {danger: true})) return;
 
     try {
         const result = await apiPost('/api/settings/clear-media');
-        await showAlert(tr('web.settings.cleared_count', {count: result.count}));
+        await showAlert(tr('web.settings.cleared_count', {count: result.count}, true));
     } catch (e) {
-        await showAlert(tr('web.settings.clear_cache_error', {error: e.message}));
+        await showAlert(tr('web.settings.clear_cache_error', {error: e.message}, true));
     }
 }
 

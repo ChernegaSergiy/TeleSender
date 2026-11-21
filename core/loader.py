@@ -11,6 +11,7 @@ import importlib.util
 import inspect
 import asyncio
 import json
+import re
 from typing import Dict, List, Optional, Type, Any, Callable
 from pathlib import Path
 import logging
@@ -106,6 +107,32 @@ class PluginLoader:
         for plugin_name, inst in self._instances.items():
             inst.inline = inline_manager
     
+    PLUGIN_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+    def _is_safe_plugin_name(self, plugin_name: str) -> bool:
+        return isinstance(plugin_name, str) and bool(self.PLUGIN_NAME_RE.fullmatch(plugin_name))
+
+    def _resolve_plugin_path(self, plugin_name: str) -> Optional[Path]:
+        """Resolves plugin directory and ensures it stays inside plugins_dir."""
+        if not self._is_safe_plugin_name(plugin_name):
+            return None
+        base = Path(self.plugins_dir).resolve(strict=False)
+        candidate = (base / plugin_name).resolve(strict=False)
+        if candidate == base:
+            return None
+        try:
+            candidate.relative_to(base)
+        except Exception:
+            return None
+        # Reject symlink escapes: the real target must also stay inside plugins_dir.
+        try:
+            real_base = base.resolve()
+            real_candidate = candidate.resolve()
+            real_candidate.relative_to(real_base)
+        except Exception:
+            return None
+        return candidate
+
     def find_plugins(self) -> List[str]:
         """
         Finds all plugins in the folder.
@@ -118,12 +145,15 @@ class PluginLoader:
             return plugins
         
         for item in os.listdir(self.plugins_dir):
-            plugin_path = os.path.join(self.plugins_dir, item)
-            if os.path.isdir(plugin_path):
-                plugin_file = os.path.join(plugin_path, 'plugin.py')
-                manifest_file = os.path.join(plugin_path, 'manifest.json')
-                if os.path.exists(plugin_file) and os.path.exists(manifest_file):
-                    plugins.append(item)
+            if not self._is_safe_plugin_name(item):
+                continue
+            plugin_path = self._resolve_plugin_path(item)
+            if not plugin_path or not plugin_path.is_dir():
+                continue
+            plugin_file = plugin_path / 'plugin.py'
+            manifest_file = plugin_path / 'manifest.json'
+            if plugin_file.exists() and manifest_file.exists():
+                plugins.append(item)
         
         return plugins
     
@@ -214,10 +244,21 @@ class PluginLoader:
                 ))
                 return False
             
-            plugin_path = os.path.join(self.plugins_dir, plugin_name)
+            safe_path = self._resolve_plugin_path(plugin_name)
+            if not safe_path:
+                self.logger.error(f"Rejected unsafe plugin name: {plugin_name!r}")
+                return False
+
+            plugin_path = str(safe_path)
             plugin_file = os.path.join(plugin_path, 'plugin.py')
-            
-            if not os.path.exists(plugin_file):
+            plugin_file_resolved = Path(plugin_file).resolve(strict=False)
+            try:
+                plugin_file_resolved.relative_to(Path(self.plugins_dir).resolve(strict=False))
+            except Exception:
+                self.logger.error(f"Rejected plugin file outside plugins directory: {plugin_name!r}")
+                return False
+
+            if not os.path.isdir(plugin_path) or not os.path.exists(plugin_file):
                 self.logger.error(self._t(
                     "messages.plugins_file_not_found",
                     path=plugin_file

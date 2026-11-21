@@ -26,37 +26,127 @@ from src.web.two_factor import two_factor_manager
 
 QUIET_PATHS = {"/api/logs", "/favicon.ico"}
 QUIET_GET_PATHS = {"/api/bot", "/api/stats", "/api/tasks"}
+PUBLIC_AUTH_PATHS = {
+    "/login",
+    "/auth/login",
+    "/auth/bot-login",
+    "/auth/telegram-login",
+    "/auth/telegram-webapp",
+    "/auth/2fa/status",
+    "/auth/2fa/cancel",
+    "/auth/logout",
+}
+
+
+def _is_public_web_path(path: str) -> bool:
+    return (
+        path in PUBLIC_AUTH_PATHS
+        or path.startswith("/static/")
+        or path.startswith("/assets/")
+        or path == "/favicon.ico"
+    )
+
+
+class _GuardedPluginRouter:
+    """Prevents plugins from registering routes that bypass authentication."""
+
+    def __init__(self, router):
+        self._router = router
+
+    @staticmethod
+    def _guard(path):
+        if isinstance(path, str) and (_is_public_web_path(path) or path.startswith("/auth/")):
+            raise ValueError(f"Plugin route is not allowed: {path}")
+        return path
+
+    def add_route(self, method, path, handler, **kwargs):
+        self._guard(path)
+        return self._router.add_route(method, path, handler, **kwargs)
+
+    def add_get(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_get(path, *args, **kwargs)
+
+    def add_post(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_post(path, *args, **kwargs)
+
+    def add_put(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_put(path, *args, **kwargs)
+
+    def add_delete(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_delete(path, *args, **kwargs)
+
+    def add_patch(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_patch(path, *args, **kwargs)
+
+    def add_head(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_head(path, *args, **kwargs)
+
+    def add_options(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_options(path, *args, **kwargs)
+
+    def add_view(self, path, *args, **kwargs):
+        self._guard(path)
+        return self._router.add_view(path, *args, **kwargs)
+
+    def add_static(self, prefix, path, **kwargs):
+        self._guard(prefix)
+        return self._router.add_static(prefix, path, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._router, name)
+
+
+class _GuardedPluginApp:
+    """App proxy passed to plugins for route registration."""
+
+    def __init__(self, app):
+        self._app = app
+        self.router = _GuardedPluginRouter(app.router)
+
+    def __getitem__(self, key):
+        return self._app[key]
+
+    def __setitem__(self, key, value):
+        self._app[key] = value
+
+    def __getattr__(self, name):
+        return getattr(self._app, name)
 
 
 @web.middleware
 async def auth_middleware(request, handler):
     if not config.web_auth_enabled:
         return await handler(request)
-    
+
     path = request.path
-    
-    if path.startswith("/static/") or path.startswith("/assets/") or path == "/favicon.ico":
+
+    if _is_public_web_path(path):
+        # Public auth endpoints handle their own checks/rate limits.
         return await handler(request)
-    
-    if path == "/login" or path.startswith("/auth/"):
-        return await handler(request)
-    
+
     blocked, blocked_until = auth.is_blocked(request)
     if blocked:
-        if path.startswith("/api/"):
+        if path.startswith("/api/") or path.startswith("/ws/"):
             return web.json_response({'error': 'blocked'}, status=429)
         return web.HTTPFound('/login')
-    
-    session_id = request.cookies.get('telesender_session')
+
+    session_id = request.cookies.get(auth.SESSION_COOKIE)
     session = auth.get_web_session(session_id)
     request["web_session"] = session
-    
+
     if session:
         return await handler(request)
-    
-    if path.startswith("/api/"):
+
+    if path.startswith("/api/") or path.startswith("/ws/"):
         return web.json_response({'error': 'unauthorized'}, status=401)
-    
+
     return web.HTTPFound('/login')
 
 
@@ -74,6 +164,50 @@ async def client_hints_middleware(request, handler):
         response.headers.setdefault("Accept-CH", hints)
         response.headers.setdefault("Vary", hints)
     return response
+
+
+MAX_JSON_BODY_BYTES = 1024 * 1024
+
+
+@web.middleware
+async def csrf_middleware(request, handler):
+    if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
+        content_length = request.content_length
+        if request.path != "/api/media/upload":
+            if content_length is not None and content_length > MAX_JSON_BODY_BYTES:
+                return web.json_response({"error": "Request body too large"}, status=413)
+        origin = request.headers.get("Origin") or request.headers.get("Referer")
+        if origin:
+            if not auth.is_trusted_origin(request):
+                if request.path.startswith("/api/") or request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.content_type == "application/json":
+                    return web.json_response({"error": "invalid origin"}, status=403)
+                return web.Response(text="Forbidden", status=403)
+        else:
+            has_session_cookie = bool(request.cookies.get(auth.SESSION_COOKIE) or request.cookies.get(auth.TWO_FACTOR_COOKIE))
+            is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            is_json = (request.content_type or "").lower() == "application/json"
+            if has_session_cookie and not (is_ajax or is_json):
+                if request.path.startswith("/api/"):
+                    return web.json_response({"error": "missing origin"}, status=403)
+                return web.Response(text="Forbidden", status=403)
+    return await handler(request)
+
+
+@web.middleware
+async def error_middleware(request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception(f"Unhandled web error: {request.method} {request.path}")
+        if request.path.startswith("/api/") or request.path.startswith("/ws/") \
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest" \
+                or (request.content_type or "").lower() == "application/json":
+            return web.json_response({"error": "Internal server error"}, status=500)
+        return web.Response(text="Internal server error", status=500)
 
 
 @web.middleware
@@ -126,7 +260,9 @@ class Server:
             max_bytes=config.web_page_cache_bytes,
         )
         self.app[PAGE_CACHE_KEY] = self.page_cache
+        self.app.middlewares.append(error_middleware)
         self.app.middlewares.append(auth_middleware)
+        self.app.middlewares.append(csrf_middleware)
         self.app.middlewares.append(log_web_request)
         self.app.middlewares.append(cache_html_pages)
         self.app.middlewares.append(client_hints_middleware)
@@ -215,11 +351,12 @@ class Server:
         if self.bot:
             plugin_service = getattr(self.bot, "plugin_service", None)
             if plugin_service:
+                guarded_app = _GuardedPluginApp(self.app)
                 for plugin_name in plugin_service.get_loaded_plugins():
                     plugin = plugin_service.get_plugin_instance(plugin_name)
                     if plugin and hasattr(plugin, "register_web_api_routes"):
                         try:
-                            plugin.register_web_api_routes(self.app)
+                            plugin.register_web_api_routes(guarded_app)
                         except Exception:
                             log.warning(
                                 "Failed to register web API routes for plugin %s",
@@ -246,11 +383,20 @@ class Server:
         self._runner = runner
         self._site = site
         log.info(f"Web interface running on http://{config.web_host}:{config.web_port}")
+        for warning in config.security_warnings():
+            log.warning(f"Security warning: {warning}")
 
     async def stop(self):
         """Stops the web server and releases the listening port."""
         if self._site is None and self._runner is None:
             return
+
+        try:
+            from src.web.ws import LogBroadcaster
+
+            await LogBroadcaster().close_all()
+        except Exception:
+            pass
 
         if self._site is not None:
             await self._site.stop()

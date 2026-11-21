@@ -4,7 +4,11 @@
 
 import json
 import os
+from pathlib import Path
 from typing import Any, List
+
+from src.services.logger import log
+from src.services.path_security import is_private_media_path
 
 
 class ExportImportService:
@@ -57,16 +61,54 @@ class ExportImportService:
         for task in import_data:
             if not isinstance(task, dict):
                 continue
+
+            media_path = task.get("media_path")
+            if isinstance(media_path, str) and media_path.strip():
+                try:
+                    resolved = Path(media_path).expanduser().resolve(strict=False)
+                    if is_private_media_path(resolved):
+                        log.warning("Blocked private media_path during task import")
+                        media_path = None
+                    else:
+                        media_path = str(resolved)
+                except Exception:
+                    media_path = None
+            elif media_path not in (None, ""):
+                media_path = None
+
+            chat_id = task.get("chat_id")
+            if not isinstance(chat_id, (str, int)):
+                chat_id = ""
+            message = task.get("message", "")
+            if not isinstance(message, str):
+                message = str(message) if message is not None else ""
+            media_type = task.get("media_type")
+            if media_type is not None and not isinstance(media_type, str):
+                media_type = None
+            interval_config = task.get("interval", {"type": "interval", "seconds": 60})
+            if not isinstance(interval_config, dict):
+                interval_config = {"type": "interval", "seconds": 60}
+            is_once = 1 if task.get("is_once", 0) in (1, True, "1", "true") else 0
+            once_time = task.get("once_time")
+            if once_time is not None and not isinstance(once_time, str):
+                once_time = str(once_time)
+            messages_list = task.get("messages_list")
+            if messages_list is not None and not isinstance(messages_list, list):
+                messages_list = None
+            chats_list = task.get("chats_list")
+            if chats_list is not None and not isinstance(chats_list, (list, str)):
+                chats_list = None
+
             db.add(
-                chat_id=task.get("chat_id"),
-                message=task.get("message", ""),
-                media_path=task.get("media_path"),
-                media_type=task.get("media_type"),
-                interval_config=task.get("interval", {"type": "interval", "seconds": 60}),
-                is_once=task.get("is_once", 0),
-                once_time=task.get("once_time"),
-                messages_list=task.get("messages_list"),
-                chats_list=task.get("chats_list"),
+                chat_id=str(chat_id),
+                message=message,
+                media_path=media_path,
+                media_type=media_type,
+                interval_config=interval_config,
+                is_once=is_once,
+                once_time=once_time,
+                messages_list=messages_list,
+                chats_list=chats_list,
             )
             count += 1
         return count

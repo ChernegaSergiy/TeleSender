@@ -13,6 +13,7 @@ from aiohttp import web
 
 from src.config.config import config
 from src.services.plugin_scaffold import create_plugin_scaffold
+from src.services.plugin_service import validate_plugin_source
 from src.services.translator import lang
 from src.web.plugin_routes import get_pages_for_plugin, invalidate_web_caches
 
@@ -90,7 +91,10 @@ class PluginApiRoutes:
     async def get_one(self, request):
         service = self._ensure_plugin_service()
         name = request.match_info["name"]
-        manifest_path = os.path.join("plugins", name, "manifest.json")
+        err = self._validate_plugin_name(name)
+        if err:
+            return err
+        manifest_path = os.path.join(config.plugins_dir, name, "manifest.json")
 
         if not os.path.exists(manifest_path):
             return web.json_response({"error": lang.get("web.errors.plugin_not_found", "Plugin not found")}, status=404)
@@ -127,11 +131,16 @@ class PluginApiRoutes:
             data = await request.json()
         except Exception:
             return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": lang.get("web.errors.invalid_json", "Invalid JSON")}, status=400)
 
         plugin_name = str(data.get("plugin") or "").strip()
         page_path = str(data.get("path") or "").strip()
         pinned = bool(data.get("pinned", True))
-        if not plugin_name or not page_path:
+        err = self._validate_plugin_name(plugin_name)
+        if err:
+            return err
+        if not page_path:
             return web.json_response(
                 {"error": lang.get("web.errors.plugin_page_not_found", "Plugin page not found")},
                 status=404,
@@ -158,6 +167,9 @@ class PluginApiRoutes:
     async def load(self, request):
         service = self._ensure_plugin_service()
         name = request.match_info["name"]
+        err = self._validate_plugin_name(name)
+        if err:
+            return err
         if name in service.get_loaded_plugins():
             return web.json_response({"error": lang.get("web.errors.already_loaded", "Already loaded")}, status=400)
 
@@ -169,6 +181,9 @@ class PluginApiRoutes:
     async def unload(self, request):
         service = self._ensure_plugin_service()
         name = request.match_info["name"]
+        err = self._validate_plugin_name(name)
+        if err:
+            return err
         if name not in service.get_loaded_plugins():
             return web.json_response({"error": lang.get("web.errors.not_loaded", "Not loaded")}, status=400)
 
@@ -180,6 +195,9 @@ class PluginApiRoutes:
     async def reload(self, request):
         service = self._ensure_plugin_service()
         name = request.match_info["name"]
+        err = self._validate_plugin_name(name)
+        if err:
+            return err
         ok = await service.reload_plugin(name)
         if ok:
             invalidate_web_caches(self.bot)
@@ -188,10 +206,15 @@ class PluginApiRoutes:
     async def update(self, request):
         service = self._ensure_plugin_service()
         name = request.match_info["name"]
+        err = self._validate_plugin_name(name)
+        if err:
+            return err
 
         try:
             data = await request.json()
         except Exception:
+            data = {}
+        if not isinstance(data, dict):
             data = {}
 
         force = bool(data.get("force", False))
@@ -236,12 +259,22 @@ class PluginApiRoutes:
         message = lang.get(key, fallback).format(**kwargs)
         return web.json_response({"error": message}, status=status)
 
+    def _validate_plugin_name(self, name: str):
+        if not PLUGIN_NAME_RE.fullmatch(str(name or "")):
+            return self._plugin_error(
+                "web.errors.invalid_plugin_name",
+                "Invalid plugin name. Use only letters, digits, _ and -",
+            )
+        return None
+
     async def create(self, request):
         service = self._ensure_plugin_service()
 
         try:
             data = await request.json()
         except Exception:
+            return self._plugin_error("web.errors.invalid_json", "Invalid JSON")
+        if not isinstance(data, dict):
             return self._plugin_error("web.errors.invalid_json", "Invalid JSON")
 
         name = str(data.get("name") or "").strip()
@@ -306,9 +339,7 @@ class PluginApiRoutes:
         })
 
     def _install_plugin_sync(self, source: str):
-        source = source.strip()
-        if not source:
-            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        source = validate_plugin_source(source)
 
         if source.startswith(("http://", "https://", "git@")):
             git_bin = shutil.which("git")
@@ -319,8 +350,20 @@ class PluginApiRoutes:
                 repo_dir = os.path.join(tmpdir, "repo")
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
+                env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
                 result = subprocess.run(
-                    [git_bin, "clone", "--depth", "1", "--single-branch", source, repo_dir],
+                    [
+                        git_bin,
+                        "-c",
+                        "http.followRedirects=false",
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--single-branch",
+                        "--",
+                        source,
+                        repo_dir,
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -400,6 +443,8 @@ class PluginApiRoutes:
         try:
             data = await request.json()
         except Exception:
+            return self._plugin_error("web.errors.invalid_json", "Invalid JSON")
+        if not isinstance(data, dict):
             return self._plugin_error("web.errors.invalid_json", "Invalid JSON")
 
         source = str(data.get("url") or data.get("source") or "").strip()

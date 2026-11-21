@@ -5,6 +5,7 @@
 import asyncio
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -64,6 +65,7 @@ class TwoFactorManager:
 
     def __init__(self):
         self._requests: Dict[str, TwoFactorRequest] = {}
+        self._lock = threading.Lock()
 
     def create_request(
         self,
@@ -73,32 +75,53 @@ class TwoFactorManager:
         timeout: float = 120.0,
         purpose: str = "login",
     ) -> TwoFactorRequest:
-        self.cleanup()
-        request_id = secrets.token_hex(16)
-        req = TwoFactorRequest(
-            request_id=request_id,
-            ip=ip,
-            user_agent=user_agent,
-            hints=hints,
-            timeout=timeout,
-            purpose=purpose,
-        )
-        self._requests[request_id] = req
-        return req
+        with self._lock:
+            self.cleanup()
+            request_id = secrets.token_hex(16)
+            req = TwoFactorRequest(
+                request_id=request_id,
+                ip=ip,
+                user_agent=user_agent,
+                hints=hints,
+                timeout=timeout,
+                purpose=purpose,
+            )
+            self._requests[request_id] = req
+            return req
 
     def get_request(self, request_id: str) -> Optional[TwoFactorRequest]:
-        self.cleanup()
-        req = self._requests.get(request_id)
-        if req and req.is_expired and req.status == "pending":
-            req.status = "expired"
-        return req
+        with self._lock:
+            self.cleanup()
+            req = self._requests.get(request_id)
+            if req and req.is_expired and req.status == "pending":
+                req.status = "expired"
+            return req
 
     def resolve_request(self, request_id: str, status: str) -> bool:
-        req = self.get_request(request_id)
-        if not req or req.status != "pending":
-            return False
-        req.status = status
-        return True
+        with self._lock:
+            req = self._requests.get(request_id)
+            if not req:
+                return False
+            if req.is_expired and req.status == "pending":
+                req.status = "expired"
+            if req.status != "pending":
+                return False
+            req.status = status
+            return True
+
+    def consume_approved_request(self, request_id: str, purpose: str = "login") -> Optional[TwoFactorRequest]:
+        """Atomically consume an approved request once."""
+        with self._lock:
+            self.cleanup()
+            req = self._requests.get(request_id)
+            if not req:
+                return None
+            if req.is_expired and req.status == "pending":
+                req.status = "expired"
+            if req.status != "approved" or req.purpose != purpose:
+                return None
+            req.status = "consumed"
+            return req
 
     def cleanup(self) -> None:
         now = time.time()

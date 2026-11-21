@@ -3,8 +3,10 @@
 """Service managing media caching and uploading to Telegram."""
 
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 from src.services.logger import log
+from src.services.path_security import is_private_media_path
 from src.services.translator import lang
 
 
@@ -20,11 +22,25 @@ class MediaService:
 
     async def get_cached_media(self, media_path: str, media_type: str) -> Optional[Any]:
         """Returns cached Telegram input media or uploads it."""
-        if media_path in self._media_cache:
-            return self._media_cache[media_path]
+        if not media_path or not isinstance(media_path, str):
+            return None
 
-        if not os.path.exists(media_path):
-            not_found_msg = lang.get("messages.file_not_found", "File not found: {path}").replace("{path}", media_path)
+        try:
+            resolved = Path(media_path).expanduser().resolve(strict=False)
+        except Exception:
+            log.warning("Rejected media path: invalid path")
+            return None
+
+        if is_private_media_path(resolved):
+            log.warning("Blocked attempt to send private media path")
+            return None
+
+        resolved_str = str(resolved)
+        if resolved_str in self._media_cache:
+            return self._media_cache[resolved_str]
+
+        if not resolved.exists() or not resolved.is_file():
+            not_found_msg = lang.get("messages.file_not_found", "File not found: {path}").replace("{path}", resolved.name)
             log.error(not_found_msg)
             return None
 
@@ -33,11 +49,11 @@ class MediaService:
             return None
 
         try:
-            result = await self.client.upload_file(media_path)
-            self._media_cache[media_path] = result
+            result = await self.client.upload_file(resolved_str)
+            self._media_cache[resolved_str] = result
             return result
         except Exception as e:
-            log.error(f"Media upload error ({media_path}): {e}")
+            log.error(f"Media upload error ({resolved.name}): {e}")
             return None
 
     def clear_media_cache(self) -> int:

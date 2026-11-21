@@ -3,20 +3,87 @@
 """Service wrapping plugin loader and registry from core."""
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+
 from core import PluginLoader, PluginRegistry
 from core.localization import CoreLocalization
 from src.config.config import config
 from src.services.translator import lang
 
 PLUGIN_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(str(ip_str))
+    except ValueError:
+        return True
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def validate_plugin_source(source: str) -> str:
+    """Validates plugin install source and blocks SSRF/arg injection vectors."""
+    source = (source or "").strip()
+    if not source:
+        raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+    if source.startswith("-"):
+        raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+
+    if source.startswith(("http://", "https://")):
+        parsed = urlparse(source)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        host = parsed.hostname.lower().strip(".")
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+            raise ValueError("Local/private git hosts are not allowed")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            addrinfos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except Exception:
+            raise ValueError("Cannot resolve git host")
+        if not addrinfos:
+            raise ValueError("Cannot resolve git host")
+        for _, _, _, _, sockaddr in addrinfos:
+            if _is_blocked_ip(sockaddr[0]):
+                raise ValueError("Local/private git hosts are not allowed")
+        return source
+
+    if source.startswith("git@"):
+        # Format: git@host:owner/repo.git
+        try:
+            host_part = source.split("@", 1)[1].split(":", 1)[0].lower().strip(".")
+        except Exception:
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        if not host_part or host_part == "localhost" or host_part.endswith(".localhost") or host_part.endswith(".local"):
+            raise ValueError("Local/private git hosts are not allowed")
+        try:
+            addrinfos = socket.getaddrinfo(host_part, 22, proto=socket.IPPROTO_TCP)
+        except Exception:
+            raise ValueError("Cannot resolve git host")
+        for _, _, _, _, sockaddr in addrinfos:
+            if _is_blocked_ip(sockaddr[0]):
+                raise ValueError("Local/private git hosts are not allowed")
+        return source
+
+    # Local path installs are allowed by existing functionality, but must not be option-like.
+    return source
 
 
 class PluginService:
@@ -73,7 +140,13 @@ class PluginService:
     def get_plugin_metadata(self, plugin_name: str):
         return self.registry.get_plugin(plugin_name)
 
+    @staticmethod
+    def _is_safe_plugin_name(name: str) -> bool:
+        return bool(PLUGIN_NAME_RE.fullmatch(str(name or "")))
+
     async def load_plugin(self, name: str) -> bool:
+        if not self._is_safe_plugin_name(name):
+            return False
         async with self._lifecycle_lock:
             ok = await self.loader.load_plugin(name)
         if ok:
@@ -81,6 +154,8 @@ class PluginService:
         return ok
 
     async def unload_plugin(self, name: str) -> bool:
+        if not self._is_safe_plugin_name(name):
+            return False
         async with self._lifecycle_lock:
             ok = await self.loader.unload_plugin(name)
         if ok:
@@ -88,6 +163,8 @@ class PluginService:
         return ok
 
     async def reload_plugin(self, name: str) -> bool:
+        if not self._is_safe_plugin_name(name):
+            return False
         async with self._lifecycle_lock:
             ok = await self.loader.reload_plugin(name)
         if ok:
@@ -201,6 +278,8 @@ class PluginService:
 
     async def _update_plugin_locked(self, name: str, force: bool = False) -> Dict[str, Any]:
         """Updates a plugin from its git repository using git pull."""
+        if not self._is_safe_plugin_name(name):
+            return {"status": "error", "error": lang.get("web.errors.invalid_plugin_name", "Invalid plugin name")}
         plugin_path = os.path.join(self.loader.plugins_dir, name)
         manifest_path = os.path.join(plugin_path, "manifest.json")
 
@@ -474,9 +553,7 @@ class PluginService:
             return {"status": "error", "error": str(e)}
 
     def _install_plugin_sync(self, source: str):
-        source = source.strip()
-        if not source:
-            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        source = validate_plugin_source(source)
 
         plugins_dir = self.loader.plugins_dir if self.loader else config.plugins_dir
 
@@ -489,8 +566,20 @@ class PluginService:
                 repo_dir = os.path.join(tmpdir, "repo")
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
+                env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
                 result = subprocess.run(
-                    [git_bin, "clone", "--depth", "1", "--single-branch", source, repo_dir],
+                    [
+                        git_bin,
+                        "-c",
+                        "http.followRedirects=false",
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--single-branch",
+                        "--",
+                        source,
+                        repo_dir,
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=120,

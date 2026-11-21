@@ -3,9 +3,11 @@
 """Telegram messaging service handling text and media transmissions."""
 
 import os
+from pathlib import Path
 from typing import Any, Optional, Union
 from src.services.logger import log
 from src.services.media_service import MediaService
+from src.services.path_security import is_private_media_path
 
 
 class TelegramService:
@@ -145,6 +147,15 @@ class TelegramService:
         reply_to: Optional[int] = None,
     ) -> bool:
         """Dispatches message as either media or pure text."""
-        if media_path and os.path.exists(media_path):
-            return await self.send_media(chat_id, media_path, media_type or "photo", msg, reply_to)
+        if media_path:
+            try:
+                resolved = Path(media_path).expanduser().resolve(strict=False)
+            except Exception:
+                log.warning("Rejected media path: invalid path")
+                return False
+            if is_private_media_path(resolved):
+                log.warning("Blocked attempt to send private media path")
+                return False
+            if resolved.exists() and resolved.is_file():
+                return await self.send_media(chat_id, str(resolved), media_type or "photo", msg, reply_to)
         return await self.send_text(chat_id, msg, reply_to)

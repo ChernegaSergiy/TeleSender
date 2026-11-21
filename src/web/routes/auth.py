@@ -4,6 +4,7 @@
 
 import hashlib
 import hmac
+import threading
 import time
 from aiohttp import web
 import aiohttp_jinja2
@@ -36,6 +37,36 @@ def get_client_hints(request) -> dict:
     return hints
 
 
+_TG_AUTH_REPLAY_TTL = 300
+_TG_AUTH_MAX_FUTURE_SKEW = 60
+_TG_AUTH_REPLAY: dict[str, float] = {}
+_TG_AUTH_REPLAY_LOCK = threading.Lock()
+
+
+def _check_telegram_auth_replay(auth_hash: str, auth_date: int) -> bool:
+    """Returns True if auth data is fresh and not replayed."""
+    now = int(time.time())
+    if auth_date > now + _TG_AUTH_MAX_FUTURE_SKEW:
+        return False
+    if now - auth_date > _TG_AUTH_REPLAY_TTL:
+        return False
+
+    key = str(auth_hash)
+    expires_at = auth_date + _TG_AUTH_REPLAY_TTL
+    with _TG_AUTH_REPLAY_LOCK:
+        # Cleanup expired entries opportunistically.
+        stale = [k for k, exp in _TG_AUTH_REPLAY.items() if exp <= now]
+        for k in stale:
+            _TG_AUTH_REPLAY.pop(k, None)
+        if len(_TG_AUTH_REPLAY) > 4096:
+            for k in sorted(_TG_AUTH_REPLAY.keys())[: len(_TG_AUTH_REPLAY) - 4096]:
+                _TG_AUTH_REPLAY.pop(k, None)
+        if key in _TG_AUTH_REPLAY:
+            return False
+        _TG_AUTH_REPLAY[key] = expires_at
+    return True
+
+
 class AuthRoutes:
     def __init__(self, server):
         self.server = server
@@ -54,9 +85,7 @@ class AuthRoutes:
         except Exception:
             return False
 
-        # Reject stale auth data (24h window).
-        if abs(int(time.time()) - auth_date) > 86400:
-            return False
+        # Freshness/replay checked after signature verification.
 
         check_pairs = []
         for key, value in data.items():
@@ -73,7 +102,9 @@ class AuthRoutes:
             data_check_string.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        return hmac.compare_digest(calculated_hash, received_hash)
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            return False
+        return _check_telegram_auth_replay(received_hash, auth_date)
 
     @staticmethod
     def _verify_telegram_webapp_init_data(init_data: str):
@@ -94,8 +125,7 @@ class AuthRoutes:
         except Exception:
             return None
 
-        if abs(int(time.time()) - auth_date) > 86400:
-            return None
+        # Freshness/replay checked after signature verification.
 
         check_pairs = []
         for key, value in parsed.items():
@@ -107,6 +137,8 @@ class AuthRoutes:
         secret_key = hmac.new(b"WebAppData", config.bot_token.encode("utf-8"), hashlib.sha256).digest()
         calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(calculated_hash, str(received_hash)):
+            return None
+        if not _check_telegram_auth_replay(str(received_hash), auth_date):
             return None
 
         try:
@@ -134,8 +166,8 @@ class AuthRoutes:
                 "req_id": "",
             }
             resp = aiohttp_jinja2.render_template("login.html", request, context)
-            if request.cookies.get("telesender_2fa_req"):
-                resp.del_cookie("telesender_2fa_req", path="/")
+            if request.cookies.get(auth.TWO_FACTOR_COOKIE):
+                auth.clear_2fa_cookie(resp, request=request)
             return resp
 
         cookie_req_id = request.cookies.get("telesender_2fa_req", "").strip()
@@ -170,7 +202,7 @@ class AuthRoutes:
         }
         resp = aiohttp_jinja2.render_template("login.html", request, context)
         if cookie_req_id and not require_2fa:
-            resp.del_cookie("telesender_2fa_req", path="/")
+            auth.clear_2fa_cookie(resp, request=request)
         return resp
 
     async def bot_login(self, request):
@@ -193,8 +225,8 @@ class AuthRoutes:
         auth.clear_failed_attempts(request)
         session_id = auth.create_web_session(method="bot", telegram_id=telegram_id)
         resp = web.HTTPFound('/')
-        auth.set_session_cookie(resp, session_id)
-        resp.del_cookie('telesender_2fa_req', path='/')
+        auth.set_session_cookie(resp, session_id, request=request)
+        auth.clear_2fa_cookie(resp, request=request)
         log.info(f"Bot button login: user {telegram_id} logged in")
         return resp
 
@@ -218,12 +250,18 @@ class AuthRoutes:
         try:
             if request.content_type == "application/json":
                 json_data = await request.json()
+                if not isinstance(json_data, dict):
+                    if is_json:
+                        return web.json_response({"error": lang.get("web.login.error", "Invalid password")}, status=400)
+                    return web.HTTPFound('/login?error=1')
                 password = str(json_data.get("password", "")).strip()
             else:
                 data = await request.post()
                 password = str(data.get("password", "")).strip()
         except Exception:
-            password = ""
+            if is_json:
+                return web.json_response({"error": lang.get("web.login.error", "Invalid password")}, status=400)
+            return web.HTTPFound('/login?error=1')
 
         if config.web_auth_password and password == config.web_auth_password:
             auth.clear_failed_attempts(request)
@@ -260,14 +298,7 @@ class AuthRoutes:
                 else:
                     resp = web.HTTPFound(f'/login?require_2fa=1&req_id={req.request_id}')
 
-                resp.set_cookie(
-                    'telesender_2fa_req',
-                    req.request_id,
-                    httponly=True,
-                    max_age=120,
-                    samesite='Lax',
-                    path='/',
-                )
+                auth.set_2fa_cookie(resp, req.request_id, request=request, max_age=120)
                 return resp
 
             session_id = auth.create_web_session(method="password")
@@ -276,8 +307,8 @@ class AuthRoutes:
             else:
                 resp = web.HTTPFound('/')
 
-            auth.set_session_cookie(resp, session_id)
-            resp.del_cookie('telesender_2fa_req', path='/')
+            auth.set_session_cookie(resp, session_id, request=request)
+            auth.clear_2fa_cookie(resp, request=request)
             return resp
         else:
             is_blocked_now = auth.record_failed_attempt(request)
@@ -299,28 +330,29 @@ class AuthRoutes:
         """Poll the status of an ongoing 2FA request."""
         req_id = request.query.get("req_id", "").strip()
         if not req_id:
-            req_id = request.cookies.get("telesender_2fa_req", "").strip()
+            req_id = request.cookies.get(auth.TWO_FACTOR_COOKIE, "").strip()
         if not req_id:
             return web.json_response({"error": "missing req_id"}, status=400)
 
         two_factor = self.server.two_factor_manager
+        consumed = two_factor.consume_approved_request(req_id, purpose="login")
+        if consumed:
+            session_id = auth.create_web_session(method="password_2fa")
+            resp = web.json_response({"status": "approved"})
+            auth.set_session_cookie(resp, session_id, request=request)
+            auth.clear_2fa_cookie(resp, request=request)
+            return resp
+
         req = two_factor.get_request(req_id)
         if not req:
             resp = web.json_response({"status": "expired"})
-            resp.del_cookie('telesender_2fa_req', path='/')
+            auth.clear_2fa_cookie(resp, request=request)
             return resp
 
         status = req.status
-        if status == "approved":
-            session_id = auth.create_web_session(method="password_2fa")
-            resp = web.json_response({"status": "approved"})
-            auth.set_session_cookie(resp, session_id)
-            resp.del_cookie('telesender_2fa_req', path='/')
-            return resp
-
-        if status in ("rejected", "expired", "cancelled"):
-            resp = web.json_response({"status": status})
-            resp.del_cookie('telesender_2fa_req', path='/')
+        if status in ("rejected", "expired", "cancelled", "consumed"):
+            resp = web.json_response({"status": "expired" if status == "consumed" else status})
+            auth.clear_2fa_cookie(resp, request=request)
             return resp
 
         return web.json_response({"status": status})
@@ -331,17 +363,19 @@ class AuthRoutes:
         try:
             if request.content_type == "application/json":
                 data = await request.json()
-                req_id = str(data.get("req_id", "")).strip()
+                if not isinstance(data, dict):
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                req_id = str(data.get("req_id", "") or "").strip()
             else:
                 data = await request.post()
-                req_id = str(data.get("req_id", "")).strip()
+                req_id = str(data.get("req_id", "") or "").strip()
         except Exception:
             pass
 
         if not req_id:
             req_id = request.query.get("req_id", "").strip()
         if not req_id:
-            req_id = request.cookies.get("telesender_2fa_req", "").strip()
+            req_id = request.cookies.get(auth.TWO_FACTOR_COOKIE, "").strip()
 
         if req_id:
             bot = getattr(self.server, "bot", None)
@@ -360,15 +394,15 @@ class AuthRoutes:
         else:
             resp = web.HTTPFound('/login')
 
-        resp.del_cookie('telesender_2fa_req', path='/')
+        auth.clear_2fa_cookie(resp, request=request)
         return resp
 
     async def logout(self, request):
         session_id = request.cookies.get(auth.SESSION_COOKIE)
         auth.delete_web_session(session_id)
         resp = web.HTTPFound('/login')
-        auth.clear_session_cookie(resp)
-        resp.del_cookie('telesender_2fa_req', path='/')
+        auth.clear_session_cookie(resp, request=request)
+        auth.clear_2fa_cookie(resp, request=request)
         return resp
 
     async def telegram_login(self, request):
@@ -380,6 +414,8 @@ class AuthRoutes:
         try:
             data = await request.json()
         except Exception:
+            return web.json_response({"error": lang.get("web.login.telegram_error", "Telegram login error")}, status=400)
+        if not isinstance(data, dict):
             return web.json_response({"error": lang.get("web.login.telegram_error", "Telegram login error")}, status=400)
 
         user = data.get("user", {}) if isinstance(data.get("user"), dict) else data
@@ -400,8 +436,8 @@ class AuthRoutes:
             auth.clear_failed_attempts(request)
             session_id = auth.create_web_session(method="telegram_widget", telegram_id=user_id)
             resp = web.json_response({"redirect": "/"})
-            auth.set_session_cookie(resp, session_id)
-            resp.del_cookie('telesender_2fa_req', path='/')
+            auth.set_session_cookie(resp, session_id, request=request)
+            auth.clear_2fa_cookie(resp, request=request)
             log.info(f"Telegram Login Widget: user {user_id} ({first_name}) logged in")
             return resp
         else:
@@ -421,6 +457,8 @@ class AuthRoutes:
             data = await request.json()
         except Exception:
             return web.json_response({"error": lang.get("web.login.telegram_error", "Telegram login error")}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": lang.get("web.login.telegram_error", "Telegram login error")}, status=400)
 
         init_data = str(data.get("initData") or data.get("init_data") or "")
         user = self._verify_telegram_webapp_init_data(init_data)
@@ -436,8 +474,8 @@ class AuthRoutes:
             auth.clear_failed_attempts(request)
             session_id = auth.create_web_session(method="telegram_webapp", telegram_id=user_id)
             resp = web.json_response({"redirect": "/"})
-            auth.set_session_cookie(resp, session_id)
-            resp.del_cookie('telesender_2fa_req', path='/')
+            auth.set_session_cookie(resp, session_id, request=request)
+            auth.clear_2fa_cookie(resp, request=request)
             log.info(f"Telegram WebApp: user {user_id} logged in")
             return resp
         else:
@@ -454,5 +492,4 @@ class AuthRoutes:
         app.router.add_post('/auth/login', self.login_post)
         app.router.add_get('/auth/2fa/status', self.check_2fa_status)
         app.router.add_post('/auth/2fa/cancel', self.cancel_2fa)
-        app.router.add_get('/auth/2fa/cancel', self.cancel_2fa)
         app.router.add_post('/auth/logout', self.logout)

@@ -43,7 +43,7 @@ class Config:
 
         # Web
         self.web_enabled = os.getenv('WEB_ENABLED', 'true').lower() == 'true'
-        self.web_host = os.getenv('WEB_HOST', '0.0.0.0')
+        self.web_host = os.getenv('WEB_HOST', '127.0.0.1')
         self.web_port = int(os.getenv('WEB_PORT', 8000))
         # Public URL used by Telegram buttons (for example a tunnel or domain).
         # Empty means "build it from WEB_HOST/WEB_PORT".
@@ -59,7 +59,7 @@ class Config:
         # on the next start. A new quick-tunnel hostname would invalidate every
         # browser session cookie, so this is on by default.
         self.tunnel_keep_alive = os.getenv('TUNNEL_KEEP_ALIVE', 'true').lower() == 'true'
-        self.web_auth_enabled = os.getenv('WEB_AUTH_ENABLED', 'false').lower() == 'true'
+        self.web_auth_enabled = os.getenv('WEB_AUTH_ENABLED', 'true').lower() == 'true'
         self.web_auth_password = os.getenv('WEB_AUTH_PASSWORD', '')
         self.web_auth_2fa = os.getenv('WEB_AUTH_2FA', 'false').lower() == 'true'
         # Let the Telegram Mini App button log in without the password: the
@@ -69,6 +69,11 @@ class Config:
         self.web_autologin_ttl = int(os.getenv('WEB_AUTOLOGIN_TTL_HOURS', '24') or 24) * 3600
         self.web_auth_max_attempts = int(os.getenv('WEB_AUTH_MAX_ATTEMPTS', '5'))
         self.web_auth_lockout_minutes = int(os.getenv('WEB_AUTH_LOCKOUT_MINUTES', '15'))
+        # Comma-separated trusted reverse proxy IPs/CIDRs. Forwarded headers are
+        # trusted only from these sources.
+        self.web_trusted_proxies = [
+            x.strip() for x in os.getenv('WEB_TRUSTED_PROXIES', '').split(',') if x.strip()
+        ]
         # Maximum size of a file uploaded from the web interface (MB).
         self.web_max_upload_mb = int(os.getenv('WEB_MAX_UPLOAD_MB', '200') or 200)
         # Rendered HTML page cache. Set to 0 to disable cached pages.
@@ -138,6 +143,27 @@ class Config:
     def get(self, key: str, default=None):
         """Get config value by key"""
         return getattr(self, key, default)
+
+    def security_warnings(self):
+        """Returns human-readable security warnings for risky settings."""
+        warnings = []
+        if not self.web_auth_enabled:
+            warnings.append(
+                "Web authentication is disabled (WEB_AUTH_ENABLED=false). "
+                "This exposes the web interface to anyone who can reach it."
+            )
+        host = (self.web_host or "").strip()
+        if host in {"", "0.0.0.0", "::", "[::]"}:
+            warnings.append(
+                f"Web server binds to {host or '0.0.0.0'} (WEB_HOST). "
+                "The interface is reachable from external networks; enable authentication and use HTTPS/trusted proxy."
+            )
+        if self.web_auth_enabled and not self.web_auth_password and not self.bot_token:
+            warnings.append(
+                "Web authentication is enabled but WEB_AUTH_PASSWORD is empty and BOT_TOKEN is not configured. "
+                "Set WEB_AUTH_PASSWORD or configure Telegram login to avoid lockout."
+            )
+        return warnings
 
 
 # Singleton instance
