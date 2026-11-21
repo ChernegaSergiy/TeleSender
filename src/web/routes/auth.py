@@ -299,6 +299,8 @@ class AuthRoutes:
                     resp = web.HTTPFound(f'/login?require_2fa=1&req_id={req.request_id}')
 
                 auth.set_2fa_cookie(resp, req.request_id, request=request, max_age=120)
+                if req.client_secret:
+                    auth.set_2fa_secret_cookie(resp, req.client_secret, request=request, max_age=120)
                 return resp
 
             session_id = auth.create_web_session(method="password")
@@ -334,8 +336,22 @@ class AuthRoutes:
         if not req_id:
             return web.json_response({"error": "missing req_id"}, status=400)
 
+        client_secret = request.cookies.get(auth.TWO_FACTOR_SECRET_COOKIE, "").strip()
         two_factor = self.server.two_factor_manager
-        consumed = two_factor.consume_approved_request(req_id, purpose="login")
+
+        req = two_factor.get_request(req_id)
+        if not req:
+            resp = web.json_response({"status": "expired"})
+            auth.clear_2fa_cookie(resp, request=request)
+            return resp
+        current_ua = (request.headers.get("User-Agent") or "Unknown")[:512]
+        if not req.verify_client_secret(client_secret) or (req.user_agent and current_ua != req.user_agent):
+            # Do not leak request status to clients without the browser-bound secret.
+            resp = web.json_response({"status": "expired"})
+            auth.clear_2fa_cookie(resp, request=request)
+            return resp
+
+        consumed = two_factor.consume_approved_request(req_id, purpose="login", client_secret=client_secret)
         if consumed:
             session_id = auth.create_web_session(method="password_2fa")
             resp = web.json_response({"status": "approved"})
@@ -343,6 +359,7 @@ class AuthRoutes:
             auth.clear_2fa_cookie(resp, request=request)
             return resp
 
+        # Re-read after consume attempt to report current non-approved status.
         req = two_factor.get_request(req_id)
         if not req:
             resp = web.json_response({"status": "expired"})

@@ -4,6 +4,8 @@
 
 import asyncio
 import logging
+import threading
+from collections import deque
 from datetime import datetime
 
 from aiohttp import WSMsgType, web
@@ -12,6 +14,7 @@ from src.web import auth
 
 MAX_WS_CLIENTS = 50
 MAX_WS_QUEUE = 200
+MAX_PENDING_BROADCAST = 1000
 
 
 class LogBroadcaster:
@@ -30,6 +33,9 @@ class LogBroadcaster:
         self.queues: dict[web.WebSocketResponse, asyncio.Queue] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
         self._lock = asyncio.Lock()
+        self._pending: deque = deque()
+        self._pending_lock = threading.Lock()
+        self._drain_scheduled = False
 
     def set_loop(self, loop):
         self.loop = loop
@@ -48,6 +54,9 @@ class LogBroadcaster:
             self.queues.pop(ws, None)
 
     async def close_all(self):
+        with self._pending_lock:
+            self._pending.clear()
+            self._drain_scheduled = False
         async with self._lock:
             clients = list(self.clients)
             queues = list(self.queues.values())
@@ -76,14 +85,46 @@ class LogBroadcaster:
         except RuntimeError:
             running = None
         if running is loop:
-            self._broadcast_now(record)
+            self._enqueue(record)
+            self._drain_pending()
             return
-        try:
-            loop.call_soon_threadsafe(self._broadcast_now, record)
-        except Exception:
-            pass
+        should_schedule = False
+        with self._pending_lock:
+            self._enqueue_locked(record)
+            if not self._drain_scheduled:
+                self._drain_scheduled = True
+                should_schedule = True
+        if should_schedule:
+            try:
+                loop.call_soon_threadsafe(self._drain_pending)
+            except Exception:
+                with self._pending_lock:
+                    self._drain_scheduled = False
 
-    def _broadcast_now(self, record: dict):
+    def _enqueue_locked(self, record: dict):
+        if len(self._pending) >= MAX_PENDING_BROADCAST:
+            try:
+                self._pending.popleft()
+            except Exception:
+                pass
+        self._pending.append(record)
+
+    def _enqueue(self, record: dict):
+        with self._pending_lock:
+            self._enqueue_locked(record)
+
+    def _drain_pending(self):
+        while True:
+            with self._pending_lock:
+                if not self._pending:
+                    self._drain_scheduled = False
+                    return
+                batch = list(self._pending)
+                self._pending.clear()
+            for record in batch:
+                self._broadcast_one(record)
+
+    def _broadcast_one(self, record: dict):
         for ws, queue in list(self.queues.items()):
             if ws.closed:
                 continue

@@ -13,7 +13,7 @@ from aiohttp import web
 
 from src.config.config import config
 from src.services.plugin_scaffold import create_plugin_scaffold
-from src.services.plugin_service import validate_plugin_source
+from src.services.plugin_service import PluginService, validate_plugin_source
 from src.services.translator import lang
 from src.web.plugin_routes import get_pages_for_plugin, invalidate_web_caches
 
@@ -351,19 +351,13 @@ class PluginApiRoutes:
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
                 env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
+                try:
+                    network_args = PluginService._git_network_args(source)
+                except Exception as e:
+                    raise RuntimeError(f"Unsafe plugin repository URL: {e}")
+                cmd = [git_bin, "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", source, repo_dir]
                 result = subprocess.run(
-                    [
-                        git_bin,
-                        "-c",
-                        "http.followRedirects=false",
-                        "clone",
-                        "--depth",
-                        "1",
-                        "--single-branch",
-                        "--",
-                        source,
-                        repo_dir,
-                    ],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=120,

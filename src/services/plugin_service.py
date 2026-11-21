@@ -184,15 +184,19 @@ class PluginService:
         except Exception:
             self.logger.debug("Could not invalidate web caches", exc_info=True)
 
-    def _run_git_sync(self, plugin_path: str, args: List[str], timeout: int = 120):
+    def _run_git_sync(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None):
         git_bin = shutil.which("git")
         if not git_bin:
             return None
 
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
 
-        command = [git_bin, "-C", plugin_path, *args]
+        command = [git_bin, "-C", plugin_path, "-c", "http.followRedirects=false"]
+        if extra_git_args:
+            command.extend(extra_git_args)
+        command.extend(args)
 
         try:
             return subprocess.run(
@@ -210,10 +214,10 @@ class PluginService:
                 stderr=f"Timeout after {timeout}s",
             )
 
-    async def _run_git(self, plugin_path: str, args: List[str], timeout: int = 120):
+    async def _run_git(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None):
         """Runs git in a worker thread so the event loop stays responsive."""
         return await asyncio.to_thread(
-            self._run_git_sync, plugin_path, args, timeout
+            self._run_git_sync, plugin_path, args, timeout, extra_git_args
         )
 
     @staticmethod
@@ -227,6 +231,36 @@ class PluginService:
         if stdout:
             return stdout.splitlines()[-1]
         return lang.get("messages.plugins_error_git_unknown", "Unknown git error")
+
+    @staticmethod
+    def _validated_repo_url(repo_url: str) -> str:
+        return validate_plugin_source(repo_url)
+
+    @staticmethod
+    def _git_network_args(repo_url: str) -> List[str]:
+        """Extra git args to reduce SSRF/DNS-rebinding risk for HTTP(S) remotes."""
+        args: List[str] = []
+        try:
+            parsed = urlparse(repo_url)
+        except Exception:
+            return args
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return args
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except Exception:
+            return args
+        # Pin resolved addresses to reduce DNS rebinding window between check and git fetch.
+        for family, _, _, _, sockaddr in infos:
+            ip = sockaddr[0]
+            if _is_blocked_ip(ip):
+                raise ValueError("Local/private git hosts are not allowed")
+            # git/curl expects [ipv6] form in some contexts; curloptResolve accepts host:port:address
+            addr = ip
+            args.extend(["-c", f"http.curloptResolve={host}:{port}:{addr}"])
+        return args
 
     @staticmethod
     def compare_versions(v1: str, v2: str) -> int:
@@ -308,6 +342,11 @@ class PluginService:
         if not repo_url:
             return {"status": "error", "error": lang.get("messages.plugins_error_no_repository", "No repository in manifest: {name}").format(name=name)}
 
+        try:
+            repo_url = self._validated_repo_url(repo_url)
+        except Exception as e:
+            return {"status": "error", "error": f"Unsafe plugin repository URL: {e}"}
+
         if not has_git:
             return await self._adopt_legacy_plugin(name, plugin_path, repo_url, old_version, force)
 
@@ -316,16 +355,26 @@ class PluginService:
             return {"status": "error", "error": lang.get("messages.plugins_git_not_found", "Git is not installed")}
 
         if remote.returncode == 0:
-            if remote.stdout.strip() != repo_url:
-                result = await self._run_git(plugin_path, ["remote", "set-url", "origin", repo_url])
+            current_remote = remote.stdout.strip()
+            try:
+                self._validated_repo_url(current_remote)
+            except Exception as e:
+                return {"status": "error", "error": f"Unsafe existing git remote: {e}"}
+            if current_remote != repo_url:
+                result = await self._run_git(plugin_path, ["remote", "set-url", "origin", "--", repo_url])
                 if result.returncode != 0:
                     return {"status": "error", "error": self._git_error(result)}
         else:
-            result = await self._run_git(plugin_path, ["remote", "add", "origin", repo_url])
+            result = await self._run_git(plugin_path, ["remote", "add", "origin", "--", repo_url])
             if result.returncode != 0:
                 return {"status": "error", "error": self._git_error(result)}
 
-        result = await self._run_git(plugin_path, ["fetch", "--prune", "origin"])
+        try:
+            network_args = self._git_network_args(repo_url)
+        except Exception as e:
+            return {"status": "error", "error": f"Unsafe plugin repository URL: {e}"}
+
+        result = await self._run_git(plugin_path, ["fetch", "--prune", "origin"], extra_git_args=network_args)
         if result.returncode != 0:
             return {"status": "error", "error": self._git_error(result)}
 
@@ -390,7 +439,7 @@ class PluginService:
             if force:
                 result = await self._run_git(plugin_path, ["reset", "--hard", upstream_ref])
             else:
-                result = await self._run_git(plugin_path, ["pull", "--ff-only"])
+                result = await self._run_git(plugin_path, ["pull", "--ff-only"], extra_git_args=network_args)
             if result.returncode != 0:
                 if was_loaded:
                     await self.load_plugin(name)
@@ -445,16 +494,24 @@ class PluginService:
 
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
         was_loaded = name in self.get_loaded_plugins()
+
+        try:
+            repo_url = self._validated_repo_url(repo_url)
+            network_args = self._git_network_args(repo_url)
+        except Exception as e:
+            return {"status": "error", "error": f"Unsafe plugin repository URL: {e}"}
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 clone_target = os.path.join(tmpdir, "repo")
                 backup = os.path.join(tmpdir, "backup")
 
+                cmd = [git_bin, "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", repo_url, clone_target]
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    [git_bin, "clone", "--depth", "1", "--single-branch", repo_url, clone_target],
+                    cmd,
                     env=env,
                     capture_output=True,
                     text=True,
@@ -567,19 +624,10 @@ class PluginService:
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
                 env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
+                network_args = self._git_network_args(source)
+                cmd = [git_bin, "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", source, repo_dir]
                 result = subprocess.run(
-                    [
-                        git_bin,
-                        "-c",
-                        "http.followRedirects=false",
-                        "clone",
-                        "--depth",
-                        "1",
-                        "--single-branch",
-                        "--",
-                        source,
-                        repo_dir,
-                    ],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=120,

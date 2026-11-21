@@ -169,13 +169,126 @@ async def client_hints_middleware(request, handler):
 MAX_JSON_BODY_BYTES = 1024 * 1024
 
 
+class _LimitedStreamReader:
+    """Wraps an aiohttp payload stream and enforces a hard byte limit."""
+
+    def __init__(self, payload, max_bytes: int):
+        self._payload = payload
+        self._max_bytes = max_bytes
+        self._read = 0
+
+    def __getattr__(self, name):
+        return getattr(self._payload, name)
+
+    def _check(self, chunk: bytes):
+        self._read += len(chunk)
+        if self._read > self._max_bytes:
+            raise web.HTTPRequestEntityTooLarge(max_size=self._max_bytes, actual_size=self._read)
+        return chunk
+
+    async def read(self, n: int = -1) -> bytes:
+        chunk = await self._payload.read(n)
+        return self._check(chunk)
+
+    async def readany(self) -> bytes:
+        chunk = await self._payload.readany()
+        return self._check(chunk)
+
+    async def readexactly(self, n: int) -> bytes:
+        chunk = await self._payload.readexactly(n)
+        return self._check(chunk)
+
+    async def readline(self) -> bytes:
+        chunk = await self._payload.readline()
+        return self._check(chunk)
+
+    async def readchunk(self):
+        chunk = await self._payload.readchunk()
+        if not chunk:
+            return chunk
+        data = chunk[0] if isinstance(chunk, tuple) else chunk
+        self._check(data)
+        return chunk
+
+    def iter_chunked(self, n: int = 8192):
+        payload = self._payload
+        max_bytes = self._max_bytes
+        state = {"read": 0}
+
+        async def _iter():
+            async for chunk in payload.iter_chunked(n):
+                state["read"] += len(chunk)
+                if state["read"] > max_bytes:
+                    raise web.HTTPRequestEntityTooLarge(max_size=max_bytes, actual_size=state["read"])
+                yield chunk
+
+        return _iter()
+
+    def iter_any(self):
+        payload = self._payload
+        max_bytes = self._max_bytes
+        state = {"read": 0}
+
+        async def _iter():
+            async for chunk in payload.iter_any():
+                state["read"] += len(chunk)
+                if state["read"] > max_bytes:
+                    raise web.HTTPRequestEntityTooLarge(max_size=max_bytes, actual_size=state["read"])
+                yield chunk
+
+        return _iter()
+
+    async def __anext__(self):
+        return self._check(await self._payload.__anext__())
+
+    def __aiter__(self):
+        return self
+
+
+@web.middleware
+async def body_limit_middleware(request, handler):
+    if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
+        if request.path == "/api/media/upload":
+            max_bytes = max(1, config.web_max_upload_mb) * 1024 * 1024
+        else:
+            max_bytes = MAX_JSON_BODY_BYTES
+
+        content_length = request.content_length
+        if content_length is not None and content_length > max_bytes:
+            return web.json_response({"error": "Request body too large"}, status=413)
+
+        if request.can_read_body and content_length is None:
+            # Chunked/unknown length: enforce cap during actual reads.
+            # For small non-upload bodies we pre-read to keep request.read()/json() simple.
+            if request.path != "/api/media/upload":
+                chunks = []
+                total = 0
+                try:
+                    while True:
+                        chunk = await request.content.readany()
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            return web.json_response({"error": "Request body too large"}, status=413)
+                        chunks.append(chunk)
+                except web.HTTPException:
+                    raise
+                except Exception:
+                    return web.json_response({"error": "Invalid request body"}, status=400)
+                request._read_bytes = b"".join(chunks)
+            else:
+                request._payload = _LimitedStreamReader(request.content, max_bytes)
+
+    try:
+        return await handler(request)
+    except web.HTTPRequestEntityTooLarge:
+        return web.json_response({"error": "Request body too large"}, status=413)
+
+
 @web.middleware
 async def csrf_middleware(request, handler):
     if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
-        content_length = request.content_length
-        if request.path != "/api/media/upload":
-            if content_length is not None and content_length > MAX_JSON_BODY_BYTES:
-                return web.json_response({"error": "Request body too large"}, status=413)
         origin = request.headers.get("Origin") or request.headers.get("Referer")
         if origin:
             if not auth.is_trusted_origin(request):
@@ -261,6 +374,7 @@ class Server:
         )
         self.app[PAGE_CACHE_KEY] = self.page_cache
         self.app.middlewares.append(error_middleware)
+        self.app.middlewares.append(body_limit_middleware)
         self.app.middlewares.append(auth_middleware)
         self.app.middlewares.append(csrf_middleware)
         self.app.middlewares.append(log_web_request)

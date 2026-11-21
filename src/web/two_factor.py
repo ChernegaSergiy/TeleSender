@@ -3,6 +3,8 @@
 """Two-Factor Authentication (2FA) manager for TeleSender Web Interface."""
 
 import asyncio
+import hashlib
+import hmac
 import os
 import secrets
 import threading
@@ -40,6 +42,7 @@ class TwoFactorRequest:
         request_id: str,
         ip: str,
         user_agent: str,
+        client_secret_hash: str,
         hints: Optional[dict] = None,
         timeout: float = 120.0,
         purpose: str = "login",
@@ -47,17 +50,27 @@ class TwoFactorRequest:
         self.request_id = request_id
         self.ip = ip
         self.user_agent = user_agent
+        self.client_secret_hash = client_secret_hash
         self.hints = hints or {}
         self.purpose = purpose  # "login" or "disable_2fa"
         self.created_at = time.time()
         self.expires_at = self.created_at + timeout
-        self.status = "pending"  # "pending", "approved", "rejected", "expired"
+        self.status = "pending"  # "pending", "approved", "rejected", "expired", "consumed"
         self.chat_id: Optional[int] = None
         self.message_id: Optional[int] = None
+        # Transient plain secret returned only to creator; not persisted/logged.
+        self.client_secret: Optional[str] = None
 
     @property
     def is_expired(self) -> bool:
         return time.time() > self.expires_at
+
+    def verify_client_secret(self, secret: str) -> bool:
+        if not secret or not self.client_secret_hash:
+            return False
+        expected = self.client_secret_hash.encode("utf-8")
+        got = hashlib.sha256(str(secret).encode("utf-8")).hexdigest().encode("utf-8")
+        return hmac.compare_digest(expected, got)
 
 
 class TwoFactorManager:
@@ -78,14 +91,18 @@ class TwoFactorManager:
         with self._lock:
             self.cleanup()
             request_id = secrets.token_hex(16)
+            client_secret = secrets.token_urlsafe(32)
+            client_secret_hash = hashlib.sha256(client_secret.encode("utf-8")).hexdigest()
             req = TwoFactorRequest(
                 request_id=request_id,
                 ip=ip,
                 user_agent=user_agent,
+                client_secret_hash=client_secret_hash,
                 hints=hints,
                 timeout=timeout,
                 purpose=purpose,
             )
+            req.client_secret = client_secret
             self._requests[request_id] = req
             return req
 
@@ -109,7 +126,12 @@ class TwoFactorManager:
             req.status = status
             return True
 
-    def consume_approved_request(self, request_id: str, purpose: str = "login") -> Optional[TwoFactorRequest]:
+    def consume_approved_request(
+        self,
+        request_id: str,
+        purpose: str = "login",
+        client_secret: Optional[str] = None,
+    ) -> Optional[TwoFactorRequest]:
         """Atomically consume an approved request once."""
         with self._lock:
             self.cleanup()
@@ -119,6 +141,8 @@ class TwoFactorManager:
             if req.is_expired and req.status == "pending":
                 req.status = "expired"
             if req.status != "approved" or req.purpose != purpose:
+                return None
+            if not req.verify_client_secret(client_secret or ""):
                 return None
             req.status = "consumed"
             return req

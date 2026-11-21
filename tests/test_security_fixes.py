@@ -68,13 +68,16 @@ class TestPathSecurity(unittest.TestCase):
 
 class TestPluginValidation(unittest.TestCase):
     def test_plugin_name_validation(self):
-        from core.loader import _is_safe_plugin_name
-        self.assertTrue(_is_safe_plugin_name("MyPlugin_1"))
-        self.assertFalse(_is_safe_plugin_name("../evil"))
-        self.assertFalse(_is_safe_plugin_name(".."))
-        self.assertFalse(_is_safe_plugin_name("a/b"))
-        self.assertFalse(_is_safe_plugin_name("a\\b"))
-        self.assertFalse(_is_safe_plugin_name(".hidden"))
+        from core.loader import PluginLoader
+        # _is_safe_plugin_name is an instance method; test via class regex/instance.
+        loader = PluginLoader.__new__(PluginLoader)
+        loader.PLUGIN_NAME_RE = PluginLoader.PLUGIN_NAME_RE
+        self.assertTrue(loader._is_safe_plugin_name("MyPlugin_1"))
+        self.assertFalse(loader._is_safe_plugin_name("../evil"))
+        self.assertFalse(loader._is_safe_plugin_name(".."))
+        self.assertFalse(loader._is_safe_plugin_name("a/b"))
+        self.assertFalse(loader._is_safe_plugin_name("a\\b"))
+        self.assertFalse(loader._is_safe_plugin_name(".hidden"))
 
     def test_validate_plugin_source_blocks_ssrf_and_injection(self):
         from src.services.plugin_service import validate_plugin_source
@@ -148,10 +151,11 @@ class TestTwoFactor(unittest.TestCase):
         from src.web.two_factor import TwoFactorManager
         mgr = TwoFactorManager()
         req = mgr.create_request(ip="1.2.3.4", user_agent="ua")
-        mgr.approve_request(req.request_id)
-        consumed = mgr.consume_approved_request(req.request_id, purpose="login")
+        secret = req.client_secret
+        mgr.resolve_request(req.request_id, "approved")
+        consumed = mgr.consume_approved_request(req.request_id, purpose="login", client_secret=secret)
         self.assertIsNotNone(consumed)
-        consumed2 = mgr.consume_approved_request(req.request_id, purpose="login")
+        consumed2 = mgr.consume_approved_request(req.request_id, purpose="login", client_secret=secret)
         self.assertIsNone(consumed2)
 
 
@@ -239,13 +243,16 @@ class TestWsSecurity(unittest.IsolatedAsyncioTestCase):
         async with bc._lock:
             bc.clients.clear()
             bc.queues.clear()
+        with bc._pending_lock:
+            bc._pending.clear()
+            bc._drain_scheduled = False
         fake_ws = SimpleNamespace(closed=False)
         async with bc._lock:
             bc.clients.add(fake_ws)
             bc.queues[fake_ws] = asyncio.Queue(maxsize=2)
-        bc._broadcast_now({"n": 1})
-        bc._broadcast_now({"n": 2})
-        bc._broadcast_now({"n": 3})
+        bc._broadcast_one({"n": 1})
+        bc._broadcast_one({"n": 2})
+        bc._broadcast_one({"n": 3})
         q = bc.get_queue(fake_ws)
         items = [q.get_nowait(), q.get_nowait()]
         self.assertEqual([i["n"] for i in items], [2, 3])
@@ -284,6 +291,194 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestBodyLimitMiddleware(unittest.IsolatedAsyncioTestCase):
+    async def _make_app(self):
+        from src.web.server import body_limit_middleware, error_middleware
+
+        async def echo(request):
+            data = await request.read()
+            return web.json_response({"size": len(data)})
+
+        app = web.Application(middlewares=[error_middleware, body_limit_middleware])
+        app.router.add_post("/api/echo", echo)
+        app.router.add_post("/api/media/upload", echo)
+        return app
+
+    async def _with_server(self, app):
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        return runner, port
+
+    async def test_json_under_limit(self):
+        app = await self._make_app()
+        runner, port = await self._with_server(app)
+        try:
+            import aiohttp
+            payload = b"{" + b"a" * 100 + b"}"
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"http://127.0.0.1:{port}/api/echo", data=payload,
+                                  headers={"Content-Type": "application/json"}) as r:
+                    self.assertEqual(r.status, 200)
+        finally:
+            await runner.cleanup()
+
+    async def test_json_over_limit_content_length(self):
+        from src.web.server import MAX_JSON_BODY_BYTES
+        app = await self._make_app()
+        runner, port = await self._with_server(app)
+        try:
+            import aiohttp
+            payload = b"x" * (MAX_JSON_BODY_BYTES + 1)
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"http://127.0.0.1:{port}/api/echo", data=payload,
+                                  headers={"Content-Type": "application/json"}) as r:
+                    self.assertEqual(r.status, 413)
+        finally:
+            await runner.cleanup()
+
+    async def test_chunked_over_limit_rejected(self):
+        from src.web.server import MAX_JSON_BODY_BYTES
+        app = await self._make_app()
+        runner, port = await self._with_server(app)
+        try:
+            import aiohttp
+
+            async def gen():
+                # send in chunks, total > limit, no Content-Length
+                chunk = b"a" * 1024
+                sent = 0
+                while sent < MAX_JSON_BODY_BYTES + 4096:
+                    yield chunk
+                    sent += len(chunk)
+
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"http://127.0.0.1:{port}/api/echo", data=gen(),
+                                  headers={"Content-Type": "application/json"}) as r:
+                    self.assertEqual(r.status, 413)
+        finally:
+            await runner.cleanup()
+
+    async def test_chunked_under_limit_allowed(self):
+        app = await self._make_app()
+        runner, port = await self._with_server(app)
+        try:
+            import aiohttp
+
+            async def gen():
+                for _ in range(10):
+                    yield b"1234567890"
+
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"http://127.0.0.1:{port}/api/echo", data=gen(),
+                                  headers={"Content-Type": "application/json"}) as r:
+                    self.assertEqual(r.status, 200)
+                    body = await r.json()
+                    self.assertEqual(body["size"], 100)
+        finally:
+            await runner.cleanup()
+
+
+class TestXForwardedFor(unittest.TestCase):
+    def setUp(self):
+        from src.web import auth
+        auth._LOGIN_ATTEMPTS.clear()
+        auth._BLOCKED_IPS.clear()
+        auth._GLOBAL_LOGIN_ATTEMPTS.clear()
+        self._old_proxies = list(getattr(config, "web_trusted_proxies", []))
+
+    def tearDown(self):
+        config.web_trusted_proxies = self._old_proxies
+
+    def _req(self, remote="1.2.3.4", headers=None):
+        return SimpleNamespace(remote=remote, transport=None, headers=headers or {}, cookies={}, secure=False)
+
+    def test_direct_connection_ignores_xff(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = []
+        req = self._req(remote="5.5.5.5", headers={"X-Forwarded-For": "1.1.1.1"})
+        self.assertEqual(get_client_ip(req), "5.5.5.5")
+
+    def test_trusted_proxy_uses_rightmost_untrusted(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = ["10.0.0.1"]
+        req = self._req(remote="10.0.0.1", headers={"X-Forwarded-For": "9.9.9.9, 10.0.0.1"})
+        self.assertEqual(get_client_ip(req), "9.9.9.9")
+
+    def test_multiple_trusted_proxies(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = ["10.0.0.1", "10.0.0.2"]
+        req = self._req(remote="10.0.0.1", headers={"X-Forwarded-For": "8.8.8.8, 9.9.9.9, 10.0.0.2"})
+        self.assertEqual(get_client_ip(req), "9.9.9.9")
+
+    def test_spoofed_chain_appended_by_client(self):
+        from src.web.auth import get_client_ip
+        # Client spoofs left side, trusted proxy appends real client at right; but we walk right-to-left skipping trusted.
+        config.web_trusted_proxies = ["10.0.0.1"]
+        req = self._req(remote="10.0.0.1", headers={"X-Forwarded-For": "6.6.6.6, 7.7.7.7"})
+        # remote is trusted proxy; rightmost untrusted is 7.7.7.7 (proxy appends real client at end)
+        self.assertEqual(get_client_ip(req), "7.7.7.7")
+
+    def test_malicious_chain_with_fake_proxy(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = ["10.0.0.1"]
+        # attacker sends XFF containing trusted proxy IP in middle; remote is trusted proxy
+        req = self._req(remote="10.0.0.1", headers={"X-Forwarded-For": "2.2.2.2, 10.0.0.1, 3.3.3.3"})
+        self.assertEqual(get_client_ip(req), "3.3.3.3")
+
+    def test_invalid_ips_ignored(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = ["10.0.0.1"]
+        req = self._req(remote="10.0.0.1", headers={"X-Forwarded-For": "garbage, 9.9.9.9, unknown"})
+        self.assertEqual(get_client_ip(req), "9.9.9.9")
+
+    def test_x_real_ip_only_from_trusted_proxy(self):
+        from src.web.auth import get_client_ip
+        config.web_trusted_proxies = []
+        req = self._req(remote="5.5.5.5", headers={"X-Real-IP": "1.1.1.1"})
+        self.assertEqual(get_client_ip(req), "5.5.5.5")
+        config.web_trusted_proxies = ["5.5.5.5"]
+        self.assertEqual(get_client_ip(req), "1.1.1.1")
+
+
+class TestTwoFactorBinding(unittest.TestCase):
+    def test_wrong_secret_rejected(self):
+        from src.web.two_factor import TwoFactorManager
+        mgr = TwoFactorManager()
+        req = mgr.create_request(ip="1.2.3.4", user_agent="ua")
+        mgr.resolve_request(req.request_id, "approved")
+        consumed = mgr.consume_approved_request(req.request_id, purpose="login", client_secret="wrong")
+        self.assertIsNone(consumed)
+        # Correct secret still works after wrong attempt
+        consumed = mgr.consume_approved_request(req.request_id, purpose="login", client_secret=req.client_secret)
+        self.assertIsNotNone(consumed)
+
+    def test_missing_secret_rejected(self):
+        from src.web.two_factor import TwoFactorManager
+        mgr = TwoFactorManager()
+        req = mgr.create_request(ip="1.2.3.4", user_agent="ua")
+        mgr.resolve_request(req.request_id, "approved")
+        self.assertIsNone(mgr.consume_approved_request(req.request_id, purpose="login", client_secret=None))
+
+
+class TestWsPendingBound(unittest.TestCase):
+    def test_pending_broadcast_bounded(self):
+        from src.web import ws
+        bc = ws.LogBroadcaster()
+        with bc._pending_lock:
+            bc._pending.clear()
+            bc._drain_scheduled = False
+        for i in range(ws.MAX_PENDING_BROADCAST + 200):
+            bc._enqueue({"n": i})
+        with bc._pending_lock:
+            self.assertLessEqual(len(bc._pending), ws.MAX_PENDING_BROADCAST)
+            # should keep newest
+            last = bc._pending[-1]["n"]
+        self.assertEqual(last, ws.MAX_PENDING_BROADCAST + 199)
+
+
 class TestLoadAndStability(unittest.IsolatedAsyncioTestCase):
     async def test_http_500_requests(self):
         from src.web.server import error_middleware
@@ -315,6 +510,9 @@ class TestLoadAndStability(unittest.IsolatedAsyncioTestCase):
         async with bc._lock:
             bc.clients.clear()
             bc.queues.clear()
+        with bc._pending_lock:
+            bc._pending.clear()
+            bc._drain_scheduled = False
         bc.set_loop(asyncio.get_running_loop())
 
         app = web.Application()
@@ -324,23 +522,21 @@ class TestLoadAndStability(unittest.IsolatedAsyncioTestCase):
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
+        old = wsmod.MAX_WS_CLIENTS
         try:
             import aiohttp
+            wsmod.MAX_WS_CLIENTS = 120
             clients = []
             async with aiohttp.ClientSession() as session:
-                old = wsmod.MAX_WS_CLIENTS
-                wsmod.MAX_WS_CLIENTS = 120
-                try:
-                    for _ in range(100):
-                        ws = await session.ws_connect(f"http://127.0.0.1:{port}/ws/logs")
-                    clients.append(ws)
+                for _ in range(100):
+                    cws = await session.ws_connect(f"http://127.0.0.1:{port}/ws/logs")
+                    clients.append(cws)
                 # intense broadcast
                 for i in range(200):
                     bc.broadcast({"time": "00:00:00", "level": "INFO", "message": f"msg-{i}", "logger": "t"})
                 await asyncio.sleep(0.5)
                 received = 0
                 for c in clients[:10]:
-                    # drain a few
                     for _ in range(5):
                         try:
                             msg = await asyncio.wait_for(c.receive(), timeout=1)
@@ -353,7 +549,14 @@ class TestLoadAndStability(unittest.IsolatedAsyncioTestCase):
                     await c.close()
         finally:
             wsmod.MAX_WS_CLIENTS = old
-                await runner.cleanup()
+            await runner.cleanup()
             async with bc._lock:
                 bc.clients.clear()
                 bc.queues.clear()
+            with bc._pending_lock:
+                bc._pending.clear()
+                bc._drain_scheduled = False
+
+
+if __name__ == "__main__":
+    unittest.main()

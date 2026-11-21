@@ -149,12 +149,16 @@ class SettingsApiRoutes:
                 )
 
             log.info("Web 2FA disable confirmation sent to Telegram")
-            return web.json_response({
+            resp = web.json_response({
                 "success": True,
                 "pending": True,
                 "enabled": True,
                 "request_id": req.request_id,
             })
+            web_auth.set_2fa_cookie(resp, req.request_id, request=request, max_age=120)
+            if req.client_secret:
+                web_auth.set_2fa_secret_cookie(resp, req.client_secret, request=request, max_age=120)
+            return resp
 
         try:
             save_2fa_setting(True)
@@ -170,8 +174,10 @@ class SettingsApiRoutes:
         if not req_id:
             return web.json_response({"error": "missing req_id"}, status=400)
 
+        client_secret = request.cookies.get(web_auth.TWO_FACTOR_SECRET_COOKIE, "").strip()
+        current_ua = (request.headers.get("User-Agent") or "Unknown")[:512]
         req = two_factor_manager.get_request(req_id)
-        if not req:
+        if not req or not req.verify_client_secret(client_secret) or (req.user_agent and current_ua != req.user_agent):
             return web.json_response({"status": "expired", "enabled": bool(config.web_auth_2fa)})
 
         return web.json_response({

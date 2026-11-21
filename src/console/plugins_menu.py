@@ -240,9 +240,16 @@ class PluginsMenu:
         print_color(lang.get("messages.plugins_installing", "Installing plugin..."), Colors.CYAN)
         if url.startswith("http://") or url.startswith("https://") or url.startswith("git@"):
             try:
+                from src.services.plugin_service import PluginService, validate_plugin_source
+                url = validate_plugin_source(url)
+                env = os.environ.copy()
+                env["GIT_TERMINAL_PROMPT"] = "0"
+                env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
+                network_args = PluginService._git_network_args(url)
                 with tempfile.TemporaryDirectory() as tmpdir:
                     repo_dir = os.path.join(tmpdir, "repo")
-                    subprocess.run(["git", "clone", "--depth", "1", url, repo_dir], check=True, capture_output=True)
+                    cmd = ["git", "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", url, repo_dir]
+                    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120, env=env)
                     manifest_found = None
                     for root, dirs, files in os.walk(repo_dir):
                         if "manifest.json" in files and "plugin.py" in files:

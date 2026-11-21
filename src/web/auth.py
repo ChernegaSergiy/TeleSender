@@ -157,19 +157,55 @@ def cookie_secure(request=None) -> bool:
     return _is_https_request(request)
 
 
+def _parse_ip(value: str) -> str | None:
+    value = str(value or "").strip().strip('"').strip("'")
+    if not value or value.lower() == "unknown":
+        return None
+    # Bracketed IPv6: [::1]:port or [::1]
+    if value.startswith("["):
+        end = value.find("]")
+        if end != -1:
+            value = value[1:end]
+    # IPv4:port
+    elif value.count(":") == 1:
+        host, maybe_port = value.rsplit(":", 1)
+        if maybe_port.isdigit():
+            value = host
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
 def get_client_ip(request):
-    remote = _request_remote_ip(request)
+    remote_raw = _request_remote_ip(request)
+    remote = _parse_ip(remote_raw) or remote_raw
 
     # Trust forwarded headers only from explicitly configured trusted proxies.
-    if _is_trusted_proxy(remote):
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        if forwarded:
-            first = forwarded.split(",")[0].strip()
-            if first:
-                return first
-        real_ip = request.headers.get("X-Real-IP", "").strip()
-        if real_ip:
-            return real_ip
+    if not _is_trusted_proxy(remote):
+        return remote
+
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        chain = []
+        for part in forwarded.split(","):
+            ip = _parse_ip(part)
+            if ip:
+                chain.append(ip)
+        # Walk right-to-left: skip trusted proxies, first untrusted is client.
+        for ip in reversed(chain):
+            if not _is_trusted_proxy(ip):
+                return ip
+        # All forwarded IPs are trusted proxies; fall back to leftmost valid.
+        if chain:
+            return chain[0]
+
+    real_ip = _parse_ip(request.headers.get("X-Real-IP", ""))
+    if real_ip:
+        # Only accept X-Real-IP from trusted proxy; if it's a trusted proxy itself,
+        # keep walking is impossible with single value, so return it as last resort.
+        return real_ip
+
     return remote
 
 
@@ -195,6 +231,7 @@ def clear_session_cookie(response, request=None):
 
 
 TWO_FACTOR_COOKIE = "telesender_2fa_req"
+TWO_FACTOR_SECRET_COOKIE = "telesender_2fa_secret"
 
 
 def set_2fa_cookie(response, req_id: str, request=None, max_age: int = 120):
@@ -209,9 +246,27 @@ def set_2fa_cookie(response, req_id: str, request=None, max_age: int = 120):
     )
 
 
+def set_2fa_secret_cookie(response, secret: str, request=None, max_age: int = 120):
+    response.set_cookie(
+        TWO_FACTOR_SECRET_COOKIE,
+        secret,
+        httponly=True,
+        max_age=max_age,
+        samesite="Lax",
+        secure=cookie_secure(request),
+        path="/",
+    )
+
+
 def clear_2fa_cookie(response, request=None):
     response.del_cookie(
         TWO_FACTOR_COOKIE,
+        path="/",
+        secure=cookie_secure(request),
+        samesite="Lax",
+    )
+    response.del_cookie(
+        TWO_FACTOR_SECRET_COOKIE,
         path="/",
         secure=cookie_secure(request),
         samesite="Lax",
