@@ -245,7 +245,9 @@ class PluginsMenu:
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
                 env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
-                network_args = PluginService._git_network_args(url)
+                network_args, network_env = PluginService._git_network_args(url)
+                if network_env.get("GIT_SSH_COMMAND"):
+                    env["GIT_SSH_COMMAND"] = str(network_env["GIT_SSH_COMMAND"])
                 with tempfile.TemporaryDirectory() as tmpdir:
                     repo_dir = os.path.join(tmpdir, "repo")
                     cmd = ["git", "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", url, repo_dir]

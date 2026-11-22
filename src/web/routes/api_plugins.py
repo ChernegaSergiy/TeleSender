@@ -352,7 +352,9 @@ class PluginApiRoutes:
                 env["GIT_TERMINAL_PROMPT"] = "0"
                 env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
                 try:
-                    network_args = PluginService._git_network_args(source)
+                    network_args, network_env = PluginService._git_network_args(source)
+                    if network_env.get("GIT_SSH_COMMAND"):
+                        env["GIT_SSH_COMMAND"] = str(network_env["GIT_SSH_COMMAND"])
                 except Exception as e:
                     raise RuntimeError(f"Unsafe plugin repository URL: {e}")
                 cmd = [git_bin, "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", source, repo_dir]

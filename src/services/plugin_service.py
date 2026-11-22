@@ -38,52 +38,108 @@ def _is_blocked_ip(ip_str: str) -> bool:
     )
 
 
-def validate_plugin_source(source: str) -> str:
-    """Validates plugin install source and blocks SSRF/arg injection vectors."""
+def _is_blocked_hostname(host: str) -> bool:
+    host = (host or "").lower().strip().strip(".")
+    if not host:
+        return True
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    # Literal IP hostnames.
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+        return _is_blocked_ip(str(ip))
+    except ValueError:
+        return False
+
+
+def _resolve_and_validate_host(host: str, port: int) -> list[str]:
+    """Resolve host and ensure all addresses are globally routable (non-local/private)."""
+    host = (host or "").strip().strip(".")
+    if not host:
+        raise ValueError("Cannot resolve git host")
+    if _is_blocked_hostname(host):
+        raise ValueError("Local/private git hosts are not allowed")
+    try:
+        addrinfos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except Exception as e:
+        raise ValueError("Cannot resolve git host") from e
+    if not addrinfos:
+        raise ValueError("Cannot resolve git host")
+
+    resolved: list[str] = []
+    seen = set()
+    for _, _, _, _, sockaddr in addrinfos:
+        ip = str(sockaddr[0])
+        if _is_blocked_ip(ip):
+            raise ValueError("Local/private git hosts are not allowed")
+        if ip not in seen:
+            seen.add(ip)
+            resolved.append(ip)
+    if not resolved:
+        raise ValueError("Cannot resolve git host")
+    return resolved
+
+
+def _parse_git_source(source: str) -> dict:
+    """Parse and classify a plugin source. Raises ValueError on unsafe/invalid input."""
     source = (source or "").strip()
     if not source:
         raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
     if source.startswith("-"):
+        raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+    if any(ch.isspace() for ch in source):
+        # Avoid ambiguous parsing/option injection in shell-like contexts.
         raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
 
     if source.startswith(("http://", "https://")):
         parsed = urlparse(source)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        if parsed.username or parsed.password:
+            # Credentials in URL are unnecessary and risky.
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
         host = parsed.hostname.lower().strip(".")
-        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
-            raise ValueError("Local/private git hosts are not allowed")
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        try:
-            addrinfos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-        except Exception:
-            raise ValueError("Cannot resolve git host")
-        if not addrinfos:
-            raise ValueError("Cannot resolve git host")
-        for _, _, _, _, sockaddr in addrinfos:
-            if _is_blocked_ip(sockaddr[0]):
-                raise ValueError("Local/private git hosts are not allowed")
-        return source
+        ips = _resolve_and_validate_host(host, port)
+        return {"type": "http", "source": source, "host": host, "port": port, "ips": ips}
 
     if source.startswith("git@"):
         # Format: git@host:owner/repo.git
         try:
-            host_part = source.split("@", 1)[1].split(":", 1)[0].lower().strip(".")
+            user_host, path = source.split(":", 1)
+            user, host = user_host.split("@", 1)
         except Exception:
             raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
-        if not host_part or host_part == "localhost" or host_part.endswith(".localhost") or host_part.endswith(".local"):
-            raise ValueError("Local/private git hosts are not allowed")
-        try:
-            addrinfos = socket.getaddrinfo(host_part, 22, proto=socket.IPPROTO_TCP)
-        except Exception:
-            raise ValueError("Cannot resolve git host")
-        for _, _, _, _, sockaddr in addrinfos:
-            if _is_blocked_ip(sockaddr[0]):
-                raise ValueError("Local/private git hosts are not allowed")
-        return source
+        if user != "git" or not host or not path or path.startswith("-"):
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        host = host.lower().strip(".")
+        ips = _resolve_and_validate_host(host, 22)
+        return {"type": "ssh", "source": source, "host": host, "port": 22, "user": "git", "ips": ips}
 
-    # Local path installs are allowed by existing functionality, but must not be option-like.
-    return source
+    if source.startswith("ssh://"):
+        parsed = urlparse(source)
+        if parsed.scheme != "ssh" or not parsed.hostname:
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        user = parsed.username or "git"
+        if user != "git" or parsed.password:
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        host = parsed.hostname.lower().strip(".")
+        port = parsed.port or 22
+        if not parsed.path or parsed.path == "/":
+            raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+        ips = _resolve_and_validate_host(host, port)
+        return {"type": "ssh", "source": source, "host": host, "port": port, "user": user, "ips": ips}
+
+    # Reject unknown URL schemes explicitly; allow existing local paths.
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", source):
+        raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
+    return {"type": "local", "source": source, "ips": []}
+
+
+def validate_plugin_source(source: str) -> str:
+    """Validates plugin install source and blocks SSRF/arg injection vectors."""
+    parsed = _parse_git_source(source)
+    return parsed["source"]
 
 
 class PluginService:
@@ -184,7 +240,7 @@ class PluginService:
         except Exception:
             self.logger.debug("Could not invalidate web caches", exc_info=True)
 
-    def _run_git_sync(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None):
+    def _run_git_sync(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None, extra_env: Optional[Dict[str, str]] = None):
         git_bin = shutil.which("git")
         if not git_bin:
             return None
@@ -192,6 +248,11 @@ class PluginService:
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
+        if extra_env:
+            # Only allow controlled overrides.
+            for k, v in extra_env.items():
+                if k in {"GIT_SSH_COMMAND"} and v:
+                    env[k] = str(v)
 
         command = [git_bin, "-C", plugin_path, "-c", "http.followRedirects=false"]
         if extra_git_args:
@@ -214,10 +275,10 @@ class PluginService:
                 stderr=f"Timeout after {timeout}s",
             )
 
-    async def _run_git(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None):
+    async def _run_git(self, plugin_path: str, args: List[str], timeout: int = 120, extra_git_args: Optional[List[str]] = None, extra_env: Optional[Dict[str, str]] = None):
         """Runs git in a worker thread so the event loop stays responsive."""
         return await asyncio.to_thread(
-            self._run_git_sync, plugin_path, args, timeout, extra_git_args
+            self._run_git_sync, plugin_path, args, timeout, extra_git_args, extra_env
         )
 
     @staticmethod
@@ -237,30 +298,49 @@ class PluginService:
         return validate_plugin_source(repo_url)
 
     @staticmethod
-    def _git_network_args(repo_url: str) -> List[str]:
-        """Extra git args to reduce SSRF/DNS-rebinding risk for HTTP(S) remotes."""
-        args: List[str] = []
-        try:
-            parsed = urlparse(repo_url)
-        except Exception:
-            return args
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            return args
-        host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        try:
-            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-        except Exception:
-            return args
-        # Pin resolved addresses to reduce DNS rebinding window between check and git fetch.
-        for family, _, _, _, sockaddr in infos:
-            ip = sockaddr[0]
-            if _is_blocked_ip(ip):
+    def _git_network_args(repo_url: str) -> tuple[list[str], dict[str, str]]:
+        """Extra git args/env to reduce SSRF/DNS-rebinding risk for remote git operations.
+
+        Returns (git_config_args, extra_env). Fails closed on DNS/validation errors.
+        """
+        info = _parse_git_source(repo_url)
+        source_type = info["type"]
+        if source_type == "local":
+            return [], {}
+
+        host = info["host"]
+        port = int(info["port"])
+        ips = info.get("ips") or []
+        if not ips:
+            # Should not happen because _parse_git_source validates, but fail closed.
+            _resolve_and_validate_host(host, port)
+            ips = info.get("ips") or []
+
+        if source_type == "http":
+            args: list[str] = []
+            for ip in ips:
+                if _is_blocked_ip(ip):
+                    raise ValueError("Local/private git hosts are not allowed")
+                addr = f"[{ip}]" if ":" in ip and not ip.startswith("[") else ip
+                args.extend(["-c", f"http.curloptResolve={host}:{port}:{addr}"])
+            return args, {}
+
+        if source_type == "ssh":
+            # Pin SSH connection to a verified IP to prevent DNS rebinding/re-resolution.
+            # HostKeyAlias keeps host key verification tied to original hostname.
+            selected_ip = str(ips[0])
+            if _is_blocked_ip(selected_ip):
                 raise ValueError("Local/private git hosts are not allowed")
-            # git/curl expects [ipv6] form in some contexts; curloptResolve accepts host:port:address
-            addr = ip
-            args.extend(["-c", f"http.curloptResolve={host}:{port}:{addr}"])
-        return args
+            ssh_cmd = (
+                "ssh -o BatchMode=yes "
+                f"-o Hostname={selected_ip} "
+                f"-o HostKeyAlias={host} "
+                f"-p {port} "
+                "-o ConnectTimeout=10"
+            )
+            return [], {"GIT_SSH_COMMAND": ssh_cmd}
+
+        raise ValueError(lang.get("messages.plugins_invalid_source", "Invalid path or URL"))
 
     @staticmethod
     def compare_versions(v1: str, v2: str) -> int:
@@ -370,11 +450,11 @@ class PluginService:
                 return {"status": "error", "error": self._git_error(result)}
 
         try:
-            network_args = self._git_network_args(repo_url)
+            network_args, network_env = self._git_network_args(repo_url)
         except Exception as e:
             return {"status": "error", "error": f"Unsafe plugin repository URL: {e}"}
 
-        result = await self._run_git(plugin_path, ["fetch", "--prune", "origin"], extra_git_args=network_args)
+        result = await self._run_git(plugin_path, ["fetch", "--prune", "origin"], extra_git_args=network_args, extra_env=network_env)
         if result.returncode != 0:
             return {"status": "error", "error": self._git_error(result)}
 
@@ -439,7 +519,7 @@ class PluginService:
             if force:
                 result = await self._run_git(plugin_path, ["reset", "--hard", upstream_ref])
             else:
-                result = await self._run_git(plugin_path, ["pull", "--ff-only"], extra_git_args=network_args)
+                result = await self._run_git(plugin_path, ["pull", "--ff-only"], extra_git_args=network_args, extra_env=network_env)
             if result.returncode != 0:
                 if was_loaded:
                     await self.load_plugin(name)
@@ -499,7 +579,9 @@ class PluginService:
 
         try:
             repo_url = self._validated_repo_url(repo_url)
-            network_args = self._git_network_args(repo_url)
+            network_args, network_env = self._git_network_args(repo_url)
+            if network_env.get("GIT_SSH_COMMAND"):
+                env["GIT_SSH_COMMAND"] = str(network_env["GIT_SSH_COMMAND"])
         except Exception as e:
             return {"status": "error", "error": f"Unsafe plugin repository URL: {e}"}
 
@@ -624,7 +706,9 @@ class PluginService:
                 env = os.environ.copy()
                 env["GIT_TERMINAL_PROMPT"] = "0"
                 env["GIT_ALLOW_PROTOCOL"] = "https:http:ssh"
-                network_args = self._git_network_args(source)
+                network_args, network_env = self._git_network_args(source)
+                if network_env.get("GIT_SSH_COMMAND"):
+                    env["GIT_SSH_COMMAND"] = str(network_env["GIT_SSH_COMMAND"])
                 cmd = [git_bin, "-c", "http.followRedirects=false", *network_args, "clone", "--depth", "1", "--single-branch", "--", source, repo_dir]
                 result = subprocess.run(
                     cmd,

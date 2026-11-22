@@ -246,7 +246,9 @@ class TestWsSecurity(unittest.IsolatedAsyncioTestCase):
         with bc._pending_lock:
             bc._pending.clear()
             bc._drain_scheduled = False
-        fake_ws = SimpleNamespace(closed=False)
+        class _FakeWS:
+            closed = False
+        fake_ws = _FakeWS()
         async with bc._lock:
             bc.clients.add(fake_ws)
             bc.queues[fake_ws] = asyncio.Queue(maxsize=2)
@@ -285,10 +287,6 @@ class TestSqlInjectionAudit(unittest.TestCase):
         self.assertNotIn("execute(f'INSERT", src)
         # ALTER TABLE with hardcoded tuples is allowed in current implementation
         self.assertIn("ALTER TABLE tasks ADD COLUMN", src)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestBodyLimitMiddleware(unittest.IsolatedAsyncioTestCase):
@@ -556,6 +554,65 @@ class TestLoadAndStability(unittest.IsolatedAsyncioTestCase):
             with bc._pending_lock:
                 bc._pending.clear()
                 bc._drain_scheduled = False
+
+
+class TestGitSsrfHardening(unittest.TestCase):
+    def test_validate_rejects_ssh_localhost_and_private(self):
+        from src.services.plugin_service import validate_plugin_source
+        with self.assertRaises(ValueError):
+            validate_plugin_source("ssh://git@localhost/repo.git")
+        with self.assertRaises(ValueError):
+            validate_plugin_source("git@127.0.0.1:org/repo.git")
+        with self.assertRaises(ValueError):
+            validate_plugin_source("ssh://git@[::1]/repo.git")
+
+    def test_validate_rejects_unknown_schemes(self):
+        from src.services.plugin_service import validate_plugin_source
+        with self.assertRaises(ValueError):
+            validate_plugin_source("file:///etc/passwd")
+        with self.assertRaises(ValueError):
+            validate_plugin_source("ftp://example.com/repo.git")
+        with self.assertRaises(ValueError):
+            validate_plugin_source("git://example.com/repo.git")
+
+    def test_dns_failure_fails_closed(self):
+        from src.services.plugin_service import PluginService, validate_plugin_source
+        with mock.patch("src.services.plugin_service.socket.getaddrinfo", side_effect=OSError("dns fail")):
+            with self.assertRaises(ValueError):
+                validate_plugin_source("https://example.com/repo.git")
+            with self.assertRaises(ValueError):
+                PluginService._git_network_args("https://example.com/repo.git")
+            with self.assertRaises(ValueError):
+                PluginService._git_network_args("git@example.com:org/repo.git")
+
+    def test_http_network_args_pin_resolved_ip(self):
+        import socket
+        from src.services.plugin_service import PluginService
+        fake_infos = [(socket.AF_INET, None, None, None, ("93.184.216.34", 443))]
+        with mock.patch("src.services.plugin_service.socket.getaddrinfo", return_value=fake_infos):
+            args, env = PluginService._git_network_args("https://example.com/repo.git")
+        joined = " ".join(args)
+        self.assertIn("http.curloptResolve=example.com:443:93.184.216.34", joined)
+        self.assertEqual(env, {})
+
+    def test_ssh_network_args_pin_hostname(self):
+        import socket
+        from src.services.plugin_service import PluginService
+        fake_infos = [(socket.AF_INET, None, None, None, ("93.184.216.34", 22))]
+        with mock.patch("src.services.plugin_service.socket.getaddrinfo", return_value=fake_infos):
+            args, env = PluginService._git_network_args("git@example.com:org/repo.git")
+        self.assertEqual(args, [])
+        self.assertIn("GIT_SSH_COMMAND", env)
+        self.assertIn("Hostname=93.184.216.34", env["GIT_SSH_COMMAND"])
+        self.assertIn("HostKeyAlias=example.com", env["GIT_SSH_COMMAND"])
+
+    def test_private_resolved_ip_rejected(self):
+        import socket
+        from src.services.plugin_service import PluginService
+        fake_infos = [(socket.AF_INET, None, None, None, ("127.0.0.1", 443))]
+        with mock.patch("src.services.plugin_service.socket.getaddrinfo", return_value=fake_infos):
+            with self.assertRaises(ValueError):
+                PluginService._git_network_args("https://example.com/repo.git")
 
 
 if __name__ == "__main__":
