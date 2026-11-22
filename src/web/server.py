@@ -11,6 +11,7 @@ import jinja2
 
 from src.config.config import config
 from src.services.logger import log
+from src.console.logo import get_version as get_app_version
 from src.services.translator import lang
 from src.web.page_cache import PAGE_CACHE_KEY, PageCache, cache_html_pages
 from src.web.plugin_routes import PluginPageRoutes, PluginTemplateLoader
@@ -363,6 +364,7 @@ class Server:
         self.bot = bot
         self.two_factor_manager = two_factor_manager
         self.start_time = time.time()
+        self.app_version = get_app_version()
         # Allow large media uploads from the task form (default 200 MB).
         self.app = web.Application(
             client_max_size=max(1, config.web_max_upload_mb) * 1024 * 1024
@@ -410,17 +412,17 @@ class Server:
     async def _inject_web_i18n(self, request):
         # APIs, static files and websockets never render Jinja templates, so
         # don't pay for translations/menu collection on every poll.
+        base = {"config": config, "request": request, "app_version": self.app_version}
         if request.path.startswith(
             ("/api/", "/static/", "/assets/", "/ws/", "/favicon")
         ):
-            return {"config": config, "request": request}
+            return base
         return {
+            **base,
             "web_i18n": lang.get("web", {}),
             "current_lang": lang.get_lang(),
             "current_path": request.path,
             "plugin_menu_items": await self.plugin_page_routes.get_pinned_menu_items_async(),
-            "config": config,
-            "request": request,
         }
 
     def _setup_templates(self):

@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f4f4f0">
     <title>{{ t(title_key) if title_key else t('web.title') }} — TeleSender</title>
     <link rel="icon" href="/assets/logo.png" type="image/png">
-    <link rel="stylesheet" href="/static/style.css?v=1.0.0">
+    <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
 </head>
 <body>
     {% include "sprite.html" %}
@@ -87,6 +87,6 @@
     <script>window.__INITIAL_DATA__ = {{ initial_data|tojson }};</script>
     {% endif %}
     <script src="/static/lucide.min.js"></script>
-    <script src="/static/app.js?v=1.0.0"></script>
+    <script src="/static/app.js?v={{ app_version }}"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 [project]
 name = "TeleSender"
-version = "1.0.0"
+version = "1.0.1"
 description = "Modular Telegram UserBot with plugins, task scheduler and web interface."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,11 @@ dependencies = [
     "aiohttp>=3.9.0",
     "aiohttp-jinja2>=1.6.0",
     "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "aiohttp-jinja2>=1.6.0",
 ]
 
 [project.scripts]

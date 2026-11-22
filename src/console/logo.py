@@ -36,7 +36,7 @@ def get_version() -> str:
     except Exception:
         pass
 
-    return '1.0.0'
+    return '1.0.1'
 
 
 def get_logo(show_version: bool = True) -> str:
