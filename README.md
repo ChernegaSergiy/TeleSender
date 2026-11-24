@@ -1,6 +1,6 @@
-<p align="center">
-  <img src="assets/logo-squircle.svg" alt="TeleSender" width="320">
-</p>
+<div align="center">
+<img src="assets/logo-squircle.svg" alt="TeleSender" width="160" height="160" />
+</div>
 
 <p align="center">
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python"></a>
