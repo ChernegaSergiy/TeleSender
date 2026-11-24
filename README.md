@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TeleSender" width="320">
+  <img src="assets/logo-squircle.svg" alt="TeleSender" width="320">
 </p>
 
 <p align="center">
