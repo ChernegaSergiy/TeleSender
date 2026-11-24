@@ -18,6 +18,7 @@
 [Features](#features) · [Installation](#installation) · [Configuration](#configuration) · [Running the Project](#running-the-project) · [Usage](#usage) · [Plugins](#plugins) · [Contributing](#contributing)
 
 ---
+
 </div>
 
 TeleSender is a modular Telegram userbot written in Python with async libraries. It combines a task scheduler, a plugin system, a local media gallery and a password-protected web interface in a single application.
