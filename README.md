@@ -5,16 +5,14 @@
 
 *A modular Telegram userbot with scheduling, plugins, and a web interface.*
 
-<p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python"></a>
-  <a href="https://docs.telethon.dev/"><img src="https://img.shields.io/badge/Telethon-1.36%2B-2AABEE?logo=telegram&logoColor=white" alt="Telethon"></a>
-  <a href="https://docs.aiohttp.org/"><img src="https://img.shields.io/badge/aiohttp-3.9%2B-2C5D72" alt="aiohttp"></a>
-  <a href="https://jinja.palletsprojects.com/"><img src="https://img.shields.io/badge/Jinja2-templates-427116" alt="Jinja2"></a>
-  <a href="https://pypi.org/project/python-dotenv/"><img src="https://img.shields.io/badge/python--dotenv-1.0%2B-FFE873" alt="python-dotenv"></a>
-  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-storage-003B57?logo=sqlite&logoColor=white" alt="SQLite"></a>
-  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-CSSM%20UL%20v2.0-blue" alt="License"></a>
-</p>
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Telethon](https://img.shields.io/badge/Telethon-1.36%2B-2AABEE?logo=telegram&logoColor=white)](https://docs.telethon.dev/)
+[![aiohttp](https://img.shields.io/badge/aiohttp-3.9%2B-2C5D72)](https://docs.aiohttp.org/)
+[![Jinja2](https://img.shields.io/badge/Jinja2-templates-427116)](https://jinja.palletsprojects.com/)
+[![python-dotenv](https://img.shields.io/badge/python--dotenv-1.0%2B-FFE873)](https://pypi.org/project/python-dotenv/)
+[![SQLite](https://img.shields.io/badge/SQLite-storage-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License](https://img.shields.io/badge/License-CSSM%20UL%20v2.0-blue)](LICENSE)
 </div>
 
 TeleSender is a modular Telegram userbot written in Python with async libraries. It combines a task scheduler, a plugin system, a local media gallery and a password-protected web interface in a single application.
