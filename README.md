@@ -1,4 +1,5 @@
 <div align="center">
+
 <img src="assets/logo-squircle.svg" alt="TeleSender" width="160" height="160" />
 
 # TeleSender
@@ -13,6 +14,10 @@
 [![SQLite](https://img.shields.io/badge/SQLite-storage-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-CSSM%20UL%20v2.0-blue)](LICENSE)
+
+[Features](#features) · [Installation](#installation) · [Configuration](#configuration) · [Running the Project](#running-the-project) · [Usage](#usage) · [Plugins](#plugins) · [Contributing](#contributing)
+
+---
 </div>
 
 TeleSender is a modular Telegram userbot written in Python with async libraries. It combines a task scheduler, a plugin system, a local media gallery and a password-protected web interface in a single application.
