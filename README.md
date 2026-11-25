@@ -1,32 +1,40 @@
-<p align="center">
-  <img src="assets/logo.png" alt="TeleSender" width="320">
-</p>
+<div align="center">
 
-<p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python"></a>
-  <a href="https://docs.telethon.dev/"><img src="https://img.shields.io/badge/Telethon-1.36%2B-2AABEE?logo=telegram&logoColor=white" alt="Telethon"></a>
-  <a href="https://docs.aiohttp.org/"><img src="https://img.shields.io/badge/aiohttp-3.9%2B-2C5D72" alt="aiohttp"></a>
-  <a href="https://jinja.palletsprojects.com/"><img src="https://img.shields.io/badge/Jinja2-templates-427116" alt="Jinja2"></a>
-  <a href="https://pypi.org/project/python-dotenv/"><img src="https://img.shields.io/badge/python--dotenv-1.0%2B-FFE873" alt="python-dotenv"></a>
-  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-storage-003B57?logo=sqlite&logoColor=white" alt="SQLite"></a>
-  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-CSSM%20UL%20v2.0-blue" alt="License"></a>
-</p>
+<img src="assets/logo-squircle.svg" alt="TeleSender" width="160" height="160" />
+
+# TeleSender
+
+*A modular Telegram userbot with scheduling, plugins, and a web interface.*
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Telethon](https://img.shields.io/badge/Telethon-1.36%2B-2AABEE?logo=telegram&logoColor=white)](https://docs.telethon.dev/)
+[![aiohttp](https://img.shields.io/badge/aiohttp-3.9%2B-2C5D72)](https://docs.aiohttp.org/)
+[![Jinja2](https://img.shields.io/badge/Jinja2-templates-427116)](https://jinja.palletsprojects.com/)
+[![python-dotenv](https://img.shields.io/badge/python--dotenv-1.0%2B-FFE873)](https://pypi.org/project/python-dotenv/)
+[![SQLite](https://img.shields.io/badge/SQLite-storage-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License](https://img.shields.io/badge/License-CSSM%20UL%20v2.0-blue)](LICENSE)
+
+[Features](#features) · [Installation](#installation) · [Configuration](#configuration) · [Running the Project](#running-the-project) · [Usage](#usage) · [Plugins](#plugins) · [Contributing](#contributing)
+
+---
+
+</div>
 
 TeleSender is a modular Telegram userbot written in Python with async libraries. It combines a task scheduler, a plugin system, a local media gallery and a password-protected web interface in a single application.
 
 ## Features
 
-- **Modular architecture**: separate packages for Services, Models, Commands, Handlers, Core and Console.
-- **Telegram API**: asynchronous client powered by `Telethon`.
-- **Task scheduler**: intervals (`30`, `5m`, `2h`, `1d`, `25m10s`), ranges (`60-120`) and weekday schedules (`14:10@1,3,5`).
-- **Message rotation**: cycle through several messages; one-time scheduled tasks are supported too.
-- **Media support**: photos, videos, documents, audio, stickers, GIFs, voice messages and video notes, with a local media gallery.
-- **Plugin system**: load, unload, reload, install from Git, update and create plugins at runtime; plugins can add commands, loops, watchers and web pages.
-- **Web interface**: dashboard, task and plugin management, live logs and settings, with password login and optional Telegram 2FA.
-- **Cloudflared tunnel**: exposes the web interface over HTTPS and can keep the same public URL alive across bot restarts when `TUNNEL_KEEP_ALIVE=true`.
-- **Configuration management**: environment-based config via `python-dotenv`.
-- **Docker support**: a non-root image with `docker compose` and mounted runtime state.
+- **Modular Architecture**: Separate packages for Services, Models, Commands, Handlers, Core and Console.
+- **Telegram API**: Asynchronous client powered by `Telethon`.
+- **Task Scheduler**: Intervals (`30`, `5m`, `2h`, `1d`, `25m10s`), ranges (`60-120`) and weekday schedules (`14:10@1,3,5`).
+- **Message Rotation**: Cycle through several messages; one-time scheduled tasks are supported too.
+- **Media Support**: Photos, videos, documents, audio, stickers, GIFs, voice messages and video notes, with a local media gallery.
+- **Plugin System**: Load, unload, reload, install from Git, update and create plugins at runtime; plugins can add commands, loops, watchers and web pages.
+- **Web Interface**: Dashboard, task and plugin management, live logs and settings, with password login and optional Telegram 2FA.
+- **Cloudflared Tunnel**: Exposes the web interface over HTTPS and can keep the same public URL alive across bot restarts when `TUNNEL_KEEP_ALIVE=true`.
+- **Configuration Management**: Environment-based config via `python-dotenv`.
+- **Docker Support**: A non-root image with `docker compose` and mounted runtime state.
 
 ## Installation
 
